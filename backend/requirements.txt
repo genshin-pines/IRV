@@ -1,0 +1,13 @@
+# Backend — FastAPI 后端
+# @owner 成员D (主) + 成员E (告警/日志相关)
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+sqlmodel>=0.0.22        # ORM（SQLAlchemy + Pydantic 合一）
+python-multipart>=0.0.18  # 文件上传
+python-jose[cryptography]>=3.3.0  # JWT 认证
+passlib[bcrypt]>=1.7.4   # 密码哈希
+python-dotenv>=1.0.0     # 环境变量管理
+
+# 告警 Agent 依赖
+requests>=2.31.0

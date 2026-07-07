@@ -34,3 +34,13 @@ test_images/*.png
 
 # Jupyter
 .ipynb_checkpoints/
+
+# 敏感文件
+.env
+*.db
+
+#ai
+.claude/
+
+#不需要
+*.md
