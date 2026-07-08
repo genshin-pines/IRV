@@ -1,0 +1,17 @@
+[run]
+source =
+    backend
+    alert_agent
+omit =
+    */__pycache__/*
+    alert_agent/config.py
+    alert_agent/demo.py
+    alert_agent/logger.py
+    alert_agent/llm_client.py
+    alert_agent/prompts.py
+    alert_agent/test_agent.py
+
+[report]
+fail_under = 80
+show_missing = True
+skip_empty = True

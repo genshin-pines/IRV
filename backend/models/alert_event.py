@@ -1,53 +1,51 @@
-"""
-数据库模型 — 告警事件表
-@owner 成员E
-"""
-
 from datetime import datetime, timezone
-from typing import Optional
-from sqlmodel import SQLModel, Field
+from enum import StrEnum
+
+from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from backend.database import Base
 
 
-class AlertEvent(SQLModel, table=True):
-    """告警事件 — 每次 Agent 发布告警时写入"""
+class AlertLevel(StrEnum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
+
+
+class AlertStatus(StrEnum):
+    UNREAD = "UNREAD"
+    READ = "READ"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    RESOLVED = "RESOLVED"
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class AlertEvent(Base):
     __tablename__ = "alert_events"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
-    # 告警基本信息
-    level: str = Field(index=True)               # info | warning | critical
-    title: str                                   # 告警标题
-    summary: str = Field(default="")             # 一句话摘要
-    detail: str = Field(default="")              # 详细描述
-    # 来源
-    source_module: str = Field(default="")         # 触发模块
-    affected_modules: str = Field(default="")     # 受影响模块(逗号分隔)
-    # AI 相关信息
-    ai_generated: bool = Field(default=False)    # 是否 LLM 生成
-    fingerprint: str = Field(default="", index=True)  # 去重指纹
-    # 通知
-    webhook_markdown: str = Field(default="")     # Webhook 消息体
-    # 状态
-    acknowledged: bool = Field(default=False)     # 是否已确认
-    acknowledged_at: Optional[datetime] = Field(default=None)
-    acknowledged_by: str = Field(default="")
-    # 时间
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
-        index=True,
-    )
-    ttl_minutes: int = Field(default=60)         # 告警有效时长
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "level": "warning",
-                "title": "车牌识别置信度持续偏低",
-                "summary": "连续3帧置信度低于0.5",
-                "detail": "plate_recognition 模块在过去5分钟内出现3次低置信度识别",
-                "source_module": "plate_recognition",
-                "affected_modules": "plate_recognition",
-                "ai_generated": True,
-                "fingerprint": "a1b2c3d4e5f6",
-                "acknowledged": False,
-            }
-        }
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    level: Mapped[str] = mapped_column(String(32), index=True)
+    title: Mapped[str] = mapped_column(String(255), index=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    source_module: Mapped[str] = mapped_column(String(64), index=True, default="system")
+    affected_modules: Mapped[str] = mapped_column(String(255), default="")
+    ai_generated: Mapped[bool] = mapped_column(default=False)
+    fingerprint: Mapped[str] = mapped_column(String(128), default="", index=True)
+    webhook_markdown: Mapped[str] = mapped_column(Text, default="")
+    acknowledged: Mapped[bool] = mapped_column(default=False)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    acknowledged_by: Mapped[str] = mapped_column(String(128), default="")
+    ttl_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    raw_log: Mapped[str] = mapped_column(Text, default="")
+    llm_summary: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), index=True, default=AlertStatus.UNREAD.value)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    ack_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ack_user: Mapped[str | None] = mapped_column(String(128), nullable=True)

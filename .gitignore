@@ -44,3 +44,4 @@ test_images/*.png
 
 #不需要
 *.md
+logs/*.log
