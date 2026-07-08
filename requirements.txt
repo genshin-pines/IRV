@@ -1,0 +1,25 @@
+# IRV — 智能车载交互与监控系统
+# 统一依赖清单，覆盖 backend / alert_agent / fusion / cv_modules
+# 安装: pip install -r requirements.txt
+
+# ── Web 后端 ─────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+sqlmodel>=0.0.22
+python-multipart>=0.0.18
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-dotenv>=1.0.0
+
+# ── HTTP & WebSocket ─────────────────────────────────
+requests>=2.31.0
+websockets>=13.0
+
+# ── CV 识别模块（可选，仅车牌/手势模块需要）──────────
+# opencv-python>=4.8.0
+# hyperlpr3>=0.1.3
+# numpy>=1.26.0
+
+# ── 开发工具 ─────────────────────────────────────────
+pytest>=8.0
+httpx>=0.28.0

@@ -31,7 +31,7 @@ class LLMConfig:
     model: str = ""
     # 请求参数
     temperature: float = 0.3   # 告警场景需要较低温度以保证一致性
-    max_tokens: int = 4096
+    max_tokens: int = 4096     # 精简输出以加速（告警 JSON 通常 < 1000 tokens）
     timeout: int = 30          # 请求超时秒数
     # 额外 HTTP 头
     extra_headers: Dict[str, str] = field(default_factory=dict)
@@ -52,14 +52,14 @@ PRESET_PROVIDERS: Dict[str, LLMConfig] = {
         api_key=os.environ.get("KIMI_API_KEY", ""),
         model="moonshot-v1-8k",
         temperature=0.3,
-        max_tokens=2048,
+        max_tokens=4096,
     ),
     "openai": LLMConfig(
         base_url="https://api.openai.com/v1",
         api_key=os.environ.get("OPENAI_API_KEY", ""),
         model="gpt-4o",
         temperature=0.3,
-        max_tokens=2048,
+        max_tokens=4096,
     ),
 }
 

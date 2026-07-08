@@ -30,6 +30,12 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_COLLECTOR_CAPACITY = int(os.getenv("LOG_COLLECTOR_CAPACITY", "500"))
 AGENT_POLL_INTERVAL_SEC = int(os.getenv("AGENT_POLL_INTERVAL_SEC", "30"))
 
+# ── 融合推理 ────────────────────────────────────────
+# @owner 成员E
+EVENT_BUS_WINDOW_SECONDS = float(os.getenv("EVENT_BUS_WINDOW_SECONDS", "2.0"))
+FUSION_DEDUP_MS = int(os.getenv("FUSION_DEDUP_MS", "500"))
+FUSION_LLM_ENABLED = os.getenv("FUSION_LLM_ENABLED", "true").lower() == "true"
+
 # ── 告警通知 ────────────────────────────────────────
 # @owner 成员E
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")

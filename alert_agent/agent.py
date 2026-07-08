@@ -32,6 +32,8 @@ from .prompts import (
     ANOMALY_DETECTION_PROMPT,
     ALERT_LEVEL_DECISION_PROMPT,
     ALERT_SUMMARY_PROMPT,
+    COMBINED_ANALYSIS_PROMPT,
+    COMBINED_DECISION_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
@@ -426,11 +428,29 @@ class AlertAgent:
         """
         分析日志，返回告警列表。
 
-        优先走 LLM 全链路；LLM 不可用时降级为规则引擎。
+        优化策略（规则先行 + 合并 LLM 调用）:
+          1. 规则引擎先行检测（0 延迟）
+          2. 无异常 → 秒返，不调 LLM
+          3. 有异常 → 合并 4 步为 2 步调用 LLM 深度分析
+          4. LLM 不可用 → 规则引擎直接生产告警
         """
-        if self.use_llm and self._llm_available:
+        # ── 快速通道：规则引擎先行 ──
+        rule_anomalies = rule_based_anomaly_detection(logs)
+
+        if not rule_anomalies:
+            logger.debug(f"规则引擎未检测到异常，跳过 LLM 分析（快速通道）")
+            self._llm_available = True  # 没有异常不等于 LLM 不可用
+            return []
+
+        logger.info(
+            f"规则引擎检测到 {len(rule_anomalies)} 个异常，"
+            f"将使用 LLM 深度分析..."
+        )
+
+        # ── LLM 通道：合并 4 步 → 2 步 ──
+        if self.use_llm and self._llm_available and self.client:
             try:
-                return self._analyze_with_llm(logs)
+                return self._analyze_with_llm_fast(logs, rule_anomalies)
             except Exception as e:
                 logger.warning(f"LLM 分析失败，降级为规则引擎: {e}")
                 self._llm_available = False
@@ -438,41 +458,100 @@ class AlertAgent:
 
         return self._analyze_with_rules(logs)
 
-    def _analyze_with_llm(self, logs: List[Dict]) -> List[Dict]:
-        """LLM 全链路分析"""
+    def _analyze_with_llm_fast(
+        self, logs: List[Dict], rule_hints: List[Dict]
+    ) -> List[Dict]:
+        """
+        合并 LLM 全链路分析（2 次调用替代 4 次）。
+
+        Step A: COMBINED_ANALYSIS_PROMPT  → 日志解析 + 异常检测（合并）
+        Step B: COMBINED_DECISION_PROMPT  → 级别判定 + 通知生成（合并）
+        """
         if not self.client:
             return []
 
         formatted = format_logs_for_llm(logs, max_count=self.max_logs)
 
-        # Step 1: 日志解析
-        log_analysis = self.client.chat_json(
-            user_message=formatted,
-            system_prompt=SYSTEM_LOG_ANALYSIS_PROMPT.replace("{log_text}", formatted),
-        )
-
-        # Step 2: 异常检测
-        anomaly_input = json.dumps({
-            "logs": [{"seq": e.get("seq", 0), "module": e["module"],
-                       "level": e["level"], "message": e["message"]}
-                      for e in logs],
-            "parsed": log_analysis,
+        # 附带规则引擎的预判结果，帮助 LLM 更快定位
+        hints_text = json.dumps({
+            "rule_engine_found": len(rule_hints),
+            "hints": [
+                {"type": h.get("type"), "title": h.get("title"),
+                 "severity": h.get("severity_hint"), "module": h.get("source_module")}
+                for h in rule_hints
+            ],
         }, ensure_ascii=False)
-        anomalies = self.client.chat_json(
-            user_message=anomaly_input,
-            system_prompt=ANOMALY_DETECTION_PROMPT.replace(
-                "{log_data}", anomaly_input[:3000]
-            ),
+
+        # ── Step A: 日志解析 + 异常检测（1 次调用） ──
+        t0 = time.perf_counter()
+        log_input = f"【规则引擎预判】\n{hints_text}\n\n【原始日志】\n{formatted}"
+        combined_result = self.client.chat_json(
+            user_message=log_input,
+            system_prompt=COMBINED_ANALYSIS_PROMPT.replace("{log_text}", log_input),
+        )
+        logger.info(
+            f"Step A (解析+检测) 耗时: {time.perf_counter() - t0:.1f}s"
         )
 
-        if not anomalies.get("is_anomalous"):
-            # LLM 判断正常，但规则引擎再做一次兜底检查
-            rule_anomalies = rule_based_anomaly_detection(logs)
-            if rule_anomalies:
-                logger.info(f"LLM 判断正常，但规则引擎检测到 {len(rule_anomalies)} 个异常（兜底）")
-            return self._decide_and_summarize(rule_anomalies)
+        anomalies = combined_result.get("anomalies", [])
+        if not anomalies or not combined_result.get("is_anomalous"):
+            # LLM 判定正常，但信任规则引擎发现的问题
+            if rule_hints:
+                logger.info(
+                    f"LLM 判定正常，但规则引擎发现 {len(rule_hints)} 个异常（采纳规则引擎）"
+                )
+                return self._rule_decide_and_summarize(rule_hints)
+            return []
 
-        return self._decide_and_summarize(anomalies.get("anomalies", []))
+        # 合并规则引擎 + LLM 发现的异常（去重）
+        all_anomalies = _dedupe_anomalies(rule_hints + anomalies)
+
+        # ── Step B: 级别判定 + 通知生成（1 次调用） ──
+        t1 = time.perf_counter()
+        anomaly_json = json.dumps({
+            "anomalies": all_anomalies,
+            "is_anomalous": True,
+            "recent_alerts_1h": len(self.recent_alerts(hours=1)),
+        }, ensure_ascii=False)
+
+        try:
+            decision = self.client.chat_json(
+                user_message=anomaly_json,
+                system_prompt=COMBINED_DECISION_PROMPT.replace(
+                    "{anomaly_data}", anomaly_json
+                ),
+            )
+            logger.info(
+                f"Step B (判定+通知) 耗时: {time.perf_counter() - t1:.1f}s"
+            )
+        except Exception as e:
+            logger.warning(f"LLM 决策失败，使用规则引擎: {e}")
+            return self._rule_decide_and_summarize(all_anomalies)
+
+        level = decision.get("final_level", WARNING)
+        if level not in (INFO, WARNING, CRITICAL):
+            level = WARNING
+
+        if level == INFO:
+            self._log_info_alert(decision.get("alert", {}))
+            return []
+
+        alert = {
+            "level": level,
+            "icon": LEVEL_ICON.get(level, "🔵"),
+            "title": decision.get("alert", {}).get("title", "系统告警"),
+            "summary": decision.get("alert", {}).get("summary", ""),
+            "detail": decision.get("alert", {}).get("detail", ""),
+            "affected_modules": decision.get("alert", {}).get("affected_modules", []),
+            "decision": {"final_level": level},
+            "anomalies": all_anomalies,
+            "ai_generated": True,
+            "acknowledge_required": (level == CRITICAL),
+            "websocket": decision.get("websocket"),
+            "webhook_markdown": decision.get("webhook_markdown"),
+            "log_entry": decision.get("log_entry"),
+        }
+        return [alert]
 
     def _analyze_with_rules(self, logs: List[Dict]) -> List[Dict]:
         """规则引擎分析（LLM fallback）—— 每个异常生成一条告警"""
@@ -695,6 +774,18 @@ class AlertAgent:
 # ═══════════════════════════════════════════════════════════════════
 # 工具函数
 # ═══════════════════════════════════════════════════════════════════
+
+def _dedupe_anomalies(anomalies: List[Dict]) -> List[Dict]:
+    """按 title + source_module 去重，保留首次出现的"""
+    seen = set()
+    result = []
+    for a in anomalies:
+        key = (a.get("title", ""), a.get("source_module", ""))
+        if key not in seen:
+            seen.add(key)
+            result.append(a)
+    return result
+
 
 def _gen_alert_id(prefix: str) -> str:
     """生成告警唯一 ID"""

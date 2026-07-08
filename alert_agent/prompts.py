@@ -383,3 +383,145 @@ API_SERVICE_ANALYSIS_PROMPT = """你是一个 Web 服务的专项分析师。请
   "recommendation": "建议"
 }}
 """
+
+
+# ═══════════════════════════════════════════════════════════════
+# 7. 合并 Prompt（提速：4 步 → 2 步）
+# ═══════════════════════════════════════════════════════════════
+
+COMBINED_ANALYSIS_PROMPT = """你是一个智能车载交互与监控系统的日志分析与异常检测专家。请仔细分析以下原始日志，完成结构化解析和异常检测。
+
+## 系统背景
+这是"智能车载交互与监控系统（IRV）"，包含以下模块：
+- **plate_recognition** — 通过摄像头检测并识别车牌号、颜色，使用 HyperLPR3 引擎
+- **gesture_recognition** — 识别交警手势（8种：停止/直行/左转/右转/减速/靠边/变道/待转）和车主手势（6种）
+- **api_server** — FastAPI Web 服务，提供 REST API 和 WebSocket 推送
+- **camera_stream** — RTSP 摄像头流管理，支持多路视频
+- **auth** — 用户登录认证（JWT）
+- **database** — MySQL/SQLite 数据存储
+
+## 异常检测详细指南
+
+### 1. 识别异常 (recognition)
+- 车牌置信度持续过低：连续 ≥3 帧置信度 < 0.5 → warning；平均 < 0.3 → critical
+- 正常基线置信度：≥ 0.7。关注具体数值和趋势
+- 同一车牌短时间内反复出现/消失
+- 手势识别结果频繁跳变：3 帧内切换 ≥3 次
+
+### 2. 性能异常 (performance)
+- API 延迟持续升高：单次 > 2000ms → warning；> 5000ms 且多次 → critical
+- 正常基线：< 500ms
+- 推理时间异常增长：单次 > 500ms
+- 帧率骤降：< 10 FPS（正常 ≥ 25 FPS）
+
+### 3. 系统异常 (system)
+- 摄像头断连或 RTSP 流中断：立即 → critical
+- 服务错误率突增：ERROR 占比 > 10% → critical
+- 模块重复重启或异常退出
+
+### 4. 安全异常 (security)
+- 短时间内大量登录失败：≥3 次 → warning；≥5 次 → critical（疑似暴力破解）
+- 未授权访问敏感接口
+- 异常的数据访问模式
+
+### 5. 业务异常 (business)
+- 特定时段识别量异常（远高或远低于基线）
+- 车牌颜色分布异常（如突然全是绿牌）
+
+## 日志内容
+{log_text}
+
+## 输出 JSON（严格格式，不要 markdown 代码块标记）
+{{
+  "summary": {{
+    "total": 日志总数,
+    "by_level": {{"INFO": N, "WARNING": N, "ERROR": N, "CRITICAL": N}},
+    "by_module": {{"模块名": N}},
+    "time_range": {{"start": "ISO8601 最早时间", "end": "ISO8601 最晚时间"}},
+    "key_observations": "2-3 句话概述这批日志的整体特征和趋势"
+  }},
+  "anomalies": [
+    {{
+      "type": "performance|recognition|system|security|business",
+      "severity_hint": "info|warning|critical",
+      "title": "具体标题，包含模块名和异常类型，如 'plate_recognition 连续低置信度识别'",
+      "description": "详细描述异常表现，必须包含具体数值。如 '过去5分钟内 plate_recognition 出现4帧低置信度识别(0.32, 0.41, 0.28, 0.19)，平均0.30，远低于正常基线0.7'",
+      "source_module": "来源模块名",
+      "evidence": ["完整的证据日志行（从原始日志中摘取）"],
+      "suggested_action": "具体可执行的处理建议",
+      "baseline": "正常基线值，如 '≥ 0.7'",
+      "current_value": "当前异常值，如 '平均 0.30（4帧：0.32/0.41/0.28/0.19）'"
+    }}
+  ],
+  "is_anomalous": true 或 false,
+  "overall_trend": "正常|需要关注|严重异常",
+  "analysis_confidence": 0.0~1.0
+}}
+如果没有检测到任何异常，返回：{{"summary": {{...}}, "anomalies": [], "is_anomalous": false, "overall_trend": "正常", "analysis_confidence": 1.0}}
+"""
+
+COMBINED_DECISION_PROMPT = """你是车载监控系统的告警决策与通知专家。请根据异常信息，完成级别判定并生成详细的通知内容。
+
+## 系统背景
+这是一个"智能车载交互与监控系统"，包含以下模块：
+- plate_recognition: 车牌识别模块（通过摄像头检测并识别车牌号、颜色）
+- gesture_recognition: 手势识别模块（识别交警手势8种 + 车主手势6种）
+- api_server: Web API 服务（FastAPI 后端）
+- camera_stream: 摄像头 RTSP 流管理
+- auth: 用户认证模块
+- database: 数据库（MySQL/SQLite）
+
+## 级别定义与通知策略
+### info（提示）
+- 定义：值得注意但不影响系统运行
+- 触发：单个低置信度、短时波动已恢复、一次性的非关键错误
+- 通知：仅记录日志，不推送
+### warning（警告）
+- 定义：可能影响功能，需人工关注
+- 触发：连续多次低置信度、API 延迟持续偏高、多模块同时报错
+- 通知：日志 + WebSocket 推送
+### critical（严重）
+- 定义：核心功能受损，需立即处理
+- 触发：摄像头断连、服务崩溃、安全攻击、识别率骤降 50%+
+- 通知：日志 + WebSocket + Webhook(@所有人)
+
+## 升级规则
+1. 同一模块 info 在 10 分钟内 ≥5 次 → warning
+2. 同一模块 warning 在 30 分钟内 ≥3 次 → critical
+3. ≥2 个模块同时 warning → critical
+4. 任何 critical severity_hint → 不做降级
+5. 若异常已自动恢复持续 5 分钟以上 → 可降一级
+
+## 异常数据
+{anomaly_data}
+
+## 输出要求（严格 JSON，不要 markdown 标记）
+请生成内容丰富、可操作的告警通知。每个字段必须具体、有信息量，不要用笼统的占位文本。
+
+{{
+  "final_level": "info|warning|critical",
+  "alert": {{
+    "title": "包含具体异常类型和模块的标题，如'车牌识别置信度持续偏低 + API请求超时'",
+    "level": "info|warning|critical",
+    "icon": "🔵|🟡|🔴",
+    "summary": "一句话概述，包含关键数字，如'plate_recognition连续4帧低置信度(均0.30)，api_server 2次超时(最高5200ms)'",
+    "detail": "按模块分条列举，格式如下（不要 markdown，不要IP/端口等细节）：\n1. 中文模块名（英文名）：异常现象+具体数值，对比基线。可能导致的影响和后果。建议具体处理措施。\n2. ...\n示例：\n1. 车牌识别模块（plate_recognition）：连续4帧低置信度识别(0.32/0.41/0.28/0.19)，远低于基线≥0.7。可能影响车辆通行记录准确性，导致漏识别或错误识别。建议检查摄像头镜头是否脏污、光线条件、车牌遮挡或HyperLPR3模型是否需要更新。\n2. API服务模块（api_server）：最近2次请求超时(5200ms/4800ms)，均远超基线<500ms。可能导致视频处理延迟和车辆查询失败，影响系统响应能力。建议检查API服务器负载、数据库连接池、网络延迟，优化接口性能。",
+    "affected_modules": ["模块1", "模块2"],
+    "acknowledge_required": true or false,
+    "ttl_minutes": 30 or 60
+  }},
+  "websocket": {{
+    "type": "alert",
+    "level": "info|warning|critical",
+    "title": "与 alert.title 一致或更简洁",
+    "message": "与 detail 格式一致：按模块分条，异常现象+数值、影响、建议。100-200字",
+    "timestamp": "ISO8601 格式时间",
+    "source_module": "主要受影响模块",
+    "suggested_action": "具体可执行的处理建议，如'检查摄像头镜头和光线条件，或重启API服务'",
+    "alert_id": "唯一告警ID",
+    "dismissible": true
+  }},
+  "webhook_markdown": "飞书/钉钉格式 Markdown。用 > 引用块，包含：告警级别图标、标题、时间、每个异常的详情（当前值 vs 基线）、建议操作。Critical 时末尾加 @所有人。总字数 200-500 字。",
+  "log_entry": "单行纯文本：[时间] [alert_agent] [级别] 标题 | 模块: xxx | 详情: xxx | 建议: xxx"
+}}
+"""

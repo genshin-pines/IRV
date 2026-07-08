@@ -2,6 +2,10 @@
 沙盘摄像头实时车牌识别服务
 启动: python live_server.py
 访问: http://localhost:8004
+
+环境变量:
+  FUSION_BACKEND_URL  — 主后端地址（默认 http://localhost:8000）
+  PLATE_PUSH_ENABLED  — 是否推送事件到主后端（默认 1，设 0 关闭）
 """
 import os
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|allowed_media_types;video"
@@ -11,15 +15,27 @@ import asyncio
 import base64
 import json
 import queue
+import signal
+import sys
 import time
 import cv2
 import threading
+import logging
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import uvicorn
+import urllib.request
+import urllib.error
 
 from gpu_patch import catcher  # GPU 加速版
+
+# ── 融合引擎对接配置 ──────────────────────────────────────
+FUSION_BACKEND_URL = os.getenv("FUSION_BACKEND_URL", "http://localhost:8000")
+PLATE_PUSH_ENABLED = os.getenv("PLATE_PUSH_ENABLED", "1") == "1"
+PLATE_PUSH_MIN_CONFIDENCE = float(os.getenv("PLATE_PUSH_MIN_CONFIDENCE", "0.3"))
+
+logger = logging.getLogger("live_server")
 
 app = FastAPI(title="实时车牌识别")
 
@@ -47,6 +63,80 @@ PLATE_COLOR_MAP = {
     3: "绿牌(新能源)", 4: "黑牌(港澳)", 5: "香港(单层)",
     6: "香港(双层)", 7: "澳门(单层)", 8: "澳门(双层)", 9: "黄牌(双层)",
 }
+
+
+class EventPublisher:
+    """
+    将车牌识别结果推送到主后端 FusionAgent 的事件总线。
+
+    通过 HTTP POST /api/perception/event 发送，与 live_server
+    的 WebSocket 主循环解耦，推送失败不影响视频流。
+    """
+
+    def __init__(self, backend_url: str = FUSION_BACKEND_URL):
+        self._url = f"{backend_url.rstrip('/')}/api/perception/event"
+        self._enabled = PLATE_PUSH_ENABLED
+        self._min_conf = PLATE_PUSH_MIN_CONFIDENCE
+        self._success = 0
+        self._fail = 0
+        self._skip = 0
+
+    def push_plate(self, plate: dict, camera_id: str, frame_ts: float):
+        """异步（线程）推送单个车牌识别事件到主后端"""
+        if not self._enabled:
+            self._skip += 1
+            return
+
+        conf = plate.get("conf", 0)
+        if conf < self._min_conf:
+            self._skip += 1
+            return
+
+        payload = json.dumps({
+            "module": "plate_recognition",
+            "event_type": "plate_detected",
+            "data": {
+                "plate_code": plate.get("code", ""),
+                "plate_color": plate.get("color", "未知"),
+                "confidence": conf,
+                "bbox": plate.get("bbox", []),
+            },
+            "confidence": conf,
+            "camera_id": camera_id,
+            "frame_timestamp": frame_ts,
+        }, ensure_ascii=False).encode("utf-8")
+
+        try:
+            req = urllib.request.Request(
+                self._url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=2)
+            self._success += 1
+        except Exception:
+            self._fail += 1
+            if self._fail <= 3 or self._fail % 50 == 0:
+                logger.warning(
+                    f"[EventBus] 推送失败 (累计 {self._fail} 次) — "
+                    f"后端可能未启动 ({self._url})"
+                )
+
+    def push_plates(self, plates: list, camera_id: str, frame_ts: float):
+        """批量推送一帧中的所有车牌"""
+        for p in plates:
+            self.push_plate(p, camera_id, frame_ts)
+
+    @property
+    def stats(self) -> dict:
+        return {"success": self._success, "fail": self._fail,
+                "skip": self._skip, "enabled": self._enabled,
+                "backend": self._url}
+
+
+# 全局单例
+event_publisher = EventPublisher()
 
 
 class StreamManager:
@@ -346,6 +436,10 @@ async def websocket_endpoint(ws: WebSocket):
                     t0 = time.time()
                 continue
 
+            # 推送识别结果到主后端 FusionAgent
+            if plates:
+                event_publisher.push_plates(plates, manager.current_cam or "", time.perf_counter())
+
             _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             b64 = base64.b64encode(jpeg).decode()
 
@@ -423,5 +517,24 @@ async def websocket_endpoint(ws: WebSocket):
 
 if __name__ == "__main__":
     print("\n沙盘实时车牌识别服务")
-    print("访问: http://localhost:8004\n")
-    uvicorn.run(app, host="0.0.0.0", port=8004, log_level="warning")
+    print(f"访问: http://localhost:8004")
+    print(f"事件推送: {'启用' if PLATE_PUSH_ENABLED else '禁用'} → {FUSION_BACKEND_URL}/api/perception/event")
+    print(f"最小置信度: {PLATE_PUSH_MIN_CONFIDENCE}")
+    print("按 Ctrl+C 退出\n")
+
+    # 注册信号处理，确保 Ctrl+C 能干净退出
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="0.0.0.0", port=8004, log_level="warning")
+    )
+
+    def _shutdown(sig, frame):
+        print("\n正在关闭...")
+        server.should_exit = True
+
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        print("\n已退出")

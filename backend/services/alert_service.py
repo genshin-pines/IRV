@@ -4,8 +4,10 @@
 
 职责:
   1. 创建并管理 AlertAgent 生命周期
-  2. 告警回调：将 Agent 产生的告警写入数据库 + WebSocket 广播
-  3. 提供查询接口（供 API router 调用）
+  2. 创建并管理 FusionAgent + EventBus 生命周期
+  3. 告警回调：将 Agent 产生的告警写入数据库 + WebSocket 广播
+  4. 融合回调：将 FusionAgent 产生的驾驶建议推送 WebSocket
+  5. 提供查询接口（供 API router 调用）
 """
 
 import asyncio
@@ -27,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 # 模块级单例
 _agent: AlertAgent | None = None
+_event_bus: object | None = None
+_fusion_agent: object | None = None
 _ws_broadcast: Callable[[Dict], None] | None = None
 
 
@@ -197,3 +201,96 @@ def make_alert_callback(engine):
                     logger.error(f"告警落库失败: {e}")
 
     return callback
+
+
+# ═══════════════════════════════════════════════════════════
+# 融合引擎生命周期管理
+# ═══════════════════════════════════════════════════════════
+
+async def setup_fusion_engine(
+    engine,
+    ws_broadcast=None,
+    *,
+    use_llm: bool = True,
+    window_seconds: float = 2.0,
+    dedup_ms: int = 500,
+):
+    """
+    初始化 FusionAgent + EventBus。
+
+    在 FastAPI startup 事件中调用（setup_alert_agent 之后）。
+
+    Args:
+        engine: SQLModel engine
+        ws_broadcast: WebSocket 广播函数
+        use_llm: 是否启用 LLM 融合推理
+        window_seconds: 滑动窗口大小（秒）
+        dedup_ms: 防抖间隔（毫秒）
+    """
+    global _event_bus, _fusion_agent
+
+    from fusion import AsyncEventBus, FusionAgent
+
+    # 创建事件总线
+    _event_bus = AsyncEventBus(window_seconds=window_seconds)
+    logger.info(f"EventBus 已创建: window={window_seconds}s")
+
+    # 创建 LLM 客户端
+    llm_client = None
+    if use_llm and DEEPSEEK_API_KEY:
+        try:
+            from alert_agent.llm_client import create_client
+            llm_client = create_client(LLM_PROVIDER, api_key=DEEPSEEK_API_KEY)
+            logger.info(f"Fusion LLM 客户端就绪: {LLM_PROVIDER}")
+        except Exception as e:
+            logger.warning(f"Fusion LLM 客户端创建失败，降级为纯规则模式: {e}")
+
+    # 创建融合结果回调（WebSocket 推送 + 可选 DB 写入）
+    async def on_fusion_result(result):
+        """融合结果回调：WebSocket 推送驾驶建议"""
+        if ws_broadcast:
+            try:
+                await ws_broadcast(result.to_websocket())
+            except Exception as e:
+                logger.error(f"融合结果 WebSocket 推送失败: {e}")
+
+        # 如果有融合告警，也推送
+        alert = result.to_alert()
+        if alert and ws_broadcast:
+            try:
+                await ws_broadcast(alert)
+            except Exception as e:
+                logger.error(f"融合告警 WebSocket 推送失败: {e}")
+
+    # 创建 FusionAgent
+    _fusion_agent = FusionAgent(
+        event_bus=_event_bus,
+        llm_client=llm_client,
+        use_llm=use_llm and llm_client is not None,
+        dedup_interval_ms=dedup_ms,
+        result_callback=on_fusion_result,
+    )
+    await _fusion_agent.start()
+    logger.info(
+        f"FusionAgent 已启动: LLM={'启用' if use_llm and llm_client else '禁用'}, "
+        f"window={window_seconds}s, dedup={dedup_ms}ms"
+    )
+
+
+async def stop_fusion_engine():
+    """停止融合引擎（FastAPI shutdown 事件）"""
+    global _fusion_agent, _event_bus
+    if _fusion_agent:
+        await _fusion_agent.stop()
+        _fusion_agent = None
+    _event_bus = None
+
+
+def get_event_bus():
+    """获取事件总线实例（供 API router 使用）"""
+    return _event_bus
+
+
+def get_fusion_agent():
+    """获取融合引擎实例（供 API router 使用）"""
+    return _fusion_agent
