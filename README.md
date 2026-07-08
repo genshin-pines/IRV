@@ -61,3 +61,64 @@ python live_server.py
 ## 团队
 
 5 人协作，7 天开发周期。
+
+## 运行命令
+
+以下命令默认在项目根目录 `D:\Software_Engineering_Semester_Project_2` 执行。
+
+### 1. 启动流媒体服务器 MediaMTX
+
+```powershell
+.\tools\mediamtx\mediamtx.exe
+```
+
+默认 RTSP 服务地址：
+
+```text
+rtsp://127.0.0.1:8554
+```
+
+### 2. 使用 FFmpeg 推送本地视频
+
+将测试视频循环推送到 MediaMTX：
+
+```powershell
+.\tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe `
+  -re -stream_loop -1 `
+  -i .\cv_modules\hyperlpr_demo\test_video\test12.mp4 `
+  -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p `
+  -an -rtsp_transport tcp -f rtsp rtsp://127.0.0.1:8554/live/test12
+```
+
+实时识别模块可读取：
+
+```text
+rtsp://127.0.0.1:8554/live/test12
+```
+
+### 3. 启动车牌图片/视频识别 Web 服务
+
+```powershell
+cd .\cv_modules\hyperlpr_demo
+..\..\.venv\Scripts\python.exe server.py
+```
+
+访问：
+
+```text
+http://localhost:8003
+```
+
+### 4. 启动车牌实时识别 WebSocket 服务
+
+```powershell
+cd .\cv_modules\hyperlpr_demo
+..\..\.venv\Scripts\python.exe live_server.py
+```
+
+访问：
+
+```text
+http://localhost:8004
+```
+

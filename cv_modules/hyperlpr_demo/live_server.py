@@ -20,12 +20,26 @@ from fastapi.responses import HTMLResponse
 import uvicorn
 
 from gpu_patch import catcher  # GPU 加速版
+from vehicle_lpr import get_vehicle_model, recognize_with_vehicle_crops
+from video_plate_tracker import VehiclePlateTracker, similar_plate
 
 app = FastAPI(title="实时车牌识别")
+
+LIVE_RECOGNITION_INTERVAL_SEC = 0.5
+LIVE_BOX_TTL_SEC = 0.25
+LIVE_RESULT_TTL_SEC = 2.0
+
+
+@app.on_event("startup")
+async def warmup_models():
+    dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+    get_vehicle_model().predict(dummy, classes=[2, 3, 5, 7], imgsz=640, verbose=False)
+    catcher(dummy)
 
 # ── 摄像头列表 ────────────────────────────────────────────
 CAMERAS = [
     # ═══ 本地测试 ═══
+    {"id": "99", "name": "本地测试视频 test12", "url": "rtsp://127.0.0.1:8554/live/test12"},
     {"id": "0",  "name": "本机摄像头",  "url": "0"},
     # ═══ 沙盘 RTSP（需内网 10.126.59.x）═══
     {"id": "1",  "name": "桥面",       "url": "rtsp://10.126.59.120:8554/live/live1"},
@@ -57,6 +71,11 @@ class StreamManager:
         self.current_cam = None
         self.running = False
         self.lock = threading.Lock()
+        self.tracker = VehiclePlateTracker(max_missed=8)
+        self.stream_started_at = time.perf_counter()
+        self.last_recognition_at = 0.0
+        self.last_plates = []
+        self.last_inference_ms = 0
 
     def open(self, url: str, cam_name: str):
         self.close()
@@ -77,6 +96,11 @@ class StreamManager:
                 self.cap = cap
                 self.current_cam = cam_name
                 self.running = True
+                self.tracker = VehiclePlateTracker(max_missed=8)
+                self.stream_started_at = time.perf_counter()
+                self.last_recognition_at = 0.0
+                self.last_plates = []
+                self.last_inference_ms = 0
                 return True
             else:
                 print(f"  [DEBUG] cap opened but read() returned False")
@@ -85,34 +109,95 @@ class StreamManager:
             print(f"  [DEBUG] cap.isOpened() = False")
         return False
 
+    def _merge_live_results(self, stable_results, timestamp: float):
+        recent = [
+            item for item in stable_results
+            if timestamp - float(item.get("last_time", timestamp)) <= LIVE_RESULT_TTL_SEC
+        ]
+
+        merged = []
+        for item in recent:
+            for idx, existing in enumerate(merged):
+                if similar_plate(item["plate_code"], existing["plate_code"]):
+                    item_score = (
+                        item.get("candidate_count", 1),
+                        item.get("confidence", 0),
+                        item.get("last_time", 0),
+                    )
+                    existing_score = (
+                        existing.get("candidate_count", 1),
+                        existing.get("confidence", 0),
+                        existing.get("last_time", 0),
+                    )
+                    if item_score > existing_score:
+                        merged[idx] = item
+                    break
+            else:
+                merged.append(item)
+
+        return sorted(merged, key=lambda item: item.get("last_time", 0), reverse=True)
+
     def read_frame(self):
-        """读取一帧，同时跑识别"""
+        """读取一帧，定时跑车辆裁剪识别，并复用稳定轨迹结果。"""
         if not self.cap or not self.running:
             return None, [], 0
         ret, frame = self.cap.read()
         if not ret:
             return None, [], 0
 
-        # GPU 推理
-        t0 = time.perf_counter()
-        results = catcher(frame)
-        elapsed = round((time.perf_counter() - t0) * 1000, 1)
+        now = time.perf_counter()
+        timestamp = round(now - self.stream_started_at, 2)
+        if now - self.last_recognition_at >= LIVE_RECOGNITION_INTERVAL_SEC:
+            t0 = time.perf_counter()
+            plates, regions, _rejected = recognize_with_vehicle_crops(
+                frame,
+                catcher,
+                return_rejected=True,
+            )
+            elapsed = round((time.perf_counter() - t0) * 1000, 1)
 
-        # 解析结果
-        plates = []
-        for r in results:
-            plates.append({
-                "code": r[0],
-                "conf": round(float(r[1]), 3),
-                "color": PLATE_COLOR_MAP.get(int(r[2]), "未知"),
-                "bbox": [int(v) for v in r[3]],
-            })
+            for plate in plates:
+                plate["plate_color"] = PLATE_COLOR_MAP.get(plate["plate_type"], "未知")
+            self.tracker.update(regions, plates, timestamp)
+            self.tracker.tracks = [
+                track for track in self.tracker.tracks
+                if timestamp - track.last_time <= LIVE_RESULT_TTL_SEC
+            ]
+
+            stable = self._merge_live_results(self.tracker.final_results(), timestamp)
+            self.last_plates = [
+                {
+                    "code": p["plate_code"],
+                    "conf": round(float(p["confidence"]), 3),
+                    "color": p.get("plate_color", PLATE_COLOR_MAP.get(p.get("plate_type"), "未知")),
+                    "bbox": [int(v) for v in p.get("bbox", [0, 0, 0, 0])],
+                    "track_id": p.get("track_id"),
+                    "candidate_count": p.get("candidate_count", 1),
+                    "first_time": p.get("first_time"),
+                    "last_time": p.get("last_time"),
+                }
+                for p in stable
+            ]
+            self.last_inference_ms = elapsed
+            self.last_recognition_at = now
+
+        plates = [
+            p for p in self.last_plates
+            if timestamp - float(p.get("last_time", timestamp)) <= LIVE_RESULT_TTL_SEC
+        ]
+        overlay_plates = [
+            p for p in plates
+            if timestamp - float(p.get("last_time", timestamp)) <= LIVE_BOX_TTL_SEC
+        ]
+        elapsed = self.last_inference_ms
 
         # 在帧上画框
-        for p in plates:
+        for p in overlay_plates:
             x1, y1, x2, y2 = p["bbox"]
+            if x2 <= x1 or y2 <= y1:
+                continue
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f"{p['code']} ({p['conf']:.0%})"
+            label = f"#{p.get('track_id', '-')} {p['code']} ({p['conf']:.0%})"
             cv2.putText(frame, label, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
@@ -293,8 +378,8 @@ function connectWS() {
       const bar = document.getElementById('platesBar');
       if (msg.plates && msg.plates.length) {
         bar.innerHTML = msg.plates.map(p =>
-          `<span class="plate-tag">${p.code}
-            <span class="conf">${(p.conf*100).toFixed(0)}%</span>
+          `<span class="plate-tag">#${p.track_id || '-'} ${p.code}
+            <span class="conf">${(p.conf*100).toFixed(0)}% / ${p.candidate_count || 1}帧</span>
           </span>`
         ).join('');
       } else {
@@ -346,7 +431,7 @@ async def websocket_endpoint(ws: WebSocket):
                     t0 = time.time()
                 continue
 
-            _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             b64 = base64.b64encode(jpeg).decode()
 
             payload = {

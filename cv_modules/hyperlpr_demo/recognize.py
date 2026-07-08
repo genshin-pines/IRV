@@ -1,91 +1,113 @@
 """
-HyperLPR3 最小识别脚本
-用法：
-    python recognize.py                    # 交互式输入图片路径
-    python recognize.py path/to/image.jpg  # 指定图片路径
+Image license plate recognition.
 
-返回值格式 (Plate.to_result):
-    [plate_code, rec_confidence, plate_type, det_bound_box]
-     车牌号       识别置信度      颜色类型(int)  检测框[x1,y1,x2,y2]
+Usage:
+    python recognize.py path/to/image.jpg
+
+Pipeline:
+    full image -> HyperLPR3
+    vehicle detection -> vehicle crop -> upscale -> HyperLPR3
 """
-import sys
+import argparse
 import time
-import cv2
-from gpu_patch import catcher  # GPU 加速版 HyperLPR3
 
-# 车牌颜色映射表 (来自 hyperlpr3.common.typedef)
+import cv2
+
+from gpu_patch import catcher
+from vehicle_lpr import recognize_with_vehicle_crops
+
+
 PLATE_COLOR_MAP = {
-    -1: "未知",
-     0: "蓝牌",
-     1: "黄牌(单层)",
-     2: "白牌(单层)",
-     3: "绿牌(新能源)",
-     4: "黑牌(港澳)",
-     5: "香港(单层)",
-     6: "香港(双层)",
-     7: "澳门(单层)",
-     8: "澳门(双层)",
-     9: "黄牌(双层)",
+    -1: "unknown",
+    0: "blue",
+    1: "yellow-single",
+    2: "white-single",
+    3: "green",
+    4: "black",
+    5: "hk-single",
+    6: "hk-double",
+    7: "macau-single",
+    8: "macau-double",
+    9: "yellow-double",
 }
 
 
-def recognize_plate(image_path: str):
-    """识别图片中的车牌并打印结果"""
-    img = cv2.imread(image_path)
-    if img is None:
-        print(f"无法读取图片: {image_path}")
+def draw_results(image, plates, vehicle_regions):
+    annotated = image.copy()
+
+    for region in vehicle_regions:
+        if region.source != "vehicle":
+            continue
+        x1, y1, x2, y2 = region.bbox
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (255, 160, 0), 1)
+
+    for plate in plates:
+        x1, y1, x2, y2 = plate["bbox"]
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        label = f"{plate['plate_code']} {plate['confidence']:.0%} [{plate['source']}]"
+        cv2.putText(
+            annotated,
+            label,
+            (x1, max(20, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
+        )
+
+    return annotated
+
+
+def recognize_plate(image_path: str, output_path: str | None = None):
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"Can not read image: {image_path}")
         return
 
-    print(f"图片尺寸: {img.shape[1]}x{img.shape[0]}")
+    print(f"Image size: {image.shape[1]}x{image.shape[0]}")
+    print("Running vehicle-first plate recognition...")
 
-    # 执行车牌识别（GPU 加速）
-    print("正在识别车牌 (GPU-DirectML)...")
-    t0 = time.perf_counter()
-    results = catcher(img)
-    elapsed = (time.perf_counter() - t0) * 1000
+    started = time.perf_counter()
+    plates, regions, rejected = recognize_with_vehicle_crops(
+        image,
+        catcher,
+        return_rejected=True,
+    )
+    elapsed_ms = (time.perf_counter() - started) * 1000
 
-    if not results:
-        print(f"未检测到车牌 (耗时 {elapsed:.0f}ms)")
-        return
+    vehicle_count = sum(1 for region in regions if region.source == "vehicle")
+    print(f"Vehicles detected: {vehicle_count}")
+    print(f"Rejected candidates: {len(rejected)}")
 
-    # 打印结构化结果
-    print(f"\n检测到 {len(results)} 个车牌 (耗时 {elapsed:.0f}ms):\n")
-    print(f"{'序号':<6}{'车牌号':<14}{'置信度':<10}{'颜色':<14}{'检测框位置'}")
-    print("-" * 70)
-    for i, result in enumerate(results, 1):
-        plate_code = result[0]
-        confidence = result[1]
-        plate_type = result[2]
-        bbox       = result[3]
-        color_name = PLATE_COLOR_MAP.get(plate_type, f"未知({plate_type})")
-        bbox_str   = f"({int(bbox[0])}, {int(bbox[1])}, {int(bbox[2])}, {int(bbox[3])})"
-        print(f"{i:<6}{plate_code:<14}{confidence:<10.2%}{color_name:<14}{bbox_str}")
+    if not plates:
+        print(f"No plate detected ({elapsed_ms:.0f}ms)")
+    else:
+        print(f"\nDetected {len(plates)} plate(s) ({elapsed_ms:.0f}ms):\n")
+        print(
+            f"{'idx':<5}{'plate':<14}{'conf':<10}{'color':<15}"
+            f"{'source':<10}{'bbox'}"
+        )
+        print("-" * 78)
+        for idx, plate in enumerate(plates, 1):
+            color = PLATE_COLOR_MAP.get(plate["plate_type"], "unknown")
+            bbox = plate["bbox"]
+            bbox_text = f"({bbox[0]}, {bbox[1]}, {bbox[2]}, {bbox[3]})"
+            print(
+                f"{idx:<5}{plate['plate_code']:<14}"
+                f"{plate['confidence']:<10.2%}{color:<15}"
+                f"{plate['source']:<10}{bbox_text}"
+            )
 
-    # 在图片上绘制标注框并保存
-    for result in results:
-        plate_code = result[0]
-        confidence = result[1]
-        plate_type = result[2]
-        bbox       = result[3]
-        color_name = PLATE_COLOR_MAP.get(plate_type, "未知")
-        x1, y1, x2, y2 = map(int, bbox)
-
-        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        label = f"{plate_code} {color_name} ({confidence:.0%})"
-        cv2.putText(img, label, (x1, y1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-    output_path = image_path.rsplit(".", 1)[0] + "_annotated.jpg"
-    cv2.imwrite(output_path, img)
-    print(f"\n标注图片已保存: {output_path}")
+    if output_path is None:
+        output_path = image_path.rsplit(".", 1)[0] + "_annotated.jpg"
+    cv2.imwrite(output_path, draw_results(image, plates, regions))
+    print(f"\nAnnotated image saved: {output_path}")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        image_path = sys.argv[1]
-    else:
-        print("用法: python recognize.py <图片路径>")
-        print("示例: python recognize.py test_images/car.jpg\n")
-        image_path = input("请输入图片路径: ").strip().strip('"')
+    parser = argparse.ArgumentParser(description="Vehicle-first plate recognition")
+    parser.add_argument("image", help="image path")
+    parser.add_argument("--output", "-o", default=None, help="annotated output path")
+    args = parser.parse_args()
 
-    recognize_plate(image_path)
+    recognize_plate(args.image, args.output)

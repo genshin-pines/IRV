@@ -10,6 +10,8 @@ import tempfile
 import cv2
 import numpy as np
 from gpu_patch import catcher  # GPU 加速版 HyperLPR3
+from vehicle_lpr import get_vehicle_model, recognize_with_vehicle_crops
+from video_plate_tracker import VehiclePlateTracker
 from fastapi import FastAPI, File, UploadFile, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
@@ -60,7 +62,7 @@ async def index():
   .preview img, .preview video { max-width: 100%; max-height: 300px; border-radius: 8px; }
   .row { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
   .row label { font-size: 14px; color: #555; white-space: nowrap; }
-  .row input { flex: 1; padding: 8px 12px; border: 1px solid #d0d5dd;
+  .row input, .row select { flex: 1; padding: 8px 12px; border: 1px solid #d0d5dd;
                border-radius: 6px; font-size: 14px; }
   .btn { display: inline-block; padding: 10px 28px; border: none; border-radius: 8px;
          font-size: 15px; cursor: pointer; font-weight: 600; transition: .2s; }
@@ -187,6 +189,10 @@ function showResult(html) {
   $('resultContent').innerHTML = html;
 }
 
+function sourceLabel(source) {
+  return source === 'vehicle' ? '车辆裁剪' : '整图';
+}
+
 // ── 图片识别 ──
 async function recognizeImage() {
   const file = $('fileImage').files[0];
@@ -198,11 +204,16 @@ async function recognizeImage() {
   const res = await fetch('/recognize', { method:'POST', body:fd });
   const data = await res.json();
 
-  let html = `<div class="summary">检测到 <b>${data.plate_count}</b> 个车牌</div>`;
+  let html = `<div class="summary">
+              车辆区域 <b>${data.vehicle_regions || 0}</b> 个 |
+              检测到 <b>${data.plate_count}</b> 个车牌 |
+              已过滤 ${data.rejected_count || 0} 个候选 |
+              推理 ${data.inference_ms}ms</div>`;
   if (data.plates.length) {
-    html += '<table><tr><th>车牌号</th><th>颜色</th><th>置信度</th></tr>';
+    html += '<table><tr><th>车牌号</th><th>颜色</th><th>置信度</th><th>来源</th></tr>';
     data.plates.forEach(p => {
-      html += `<tr><td><b>${p.plate_code}</b></td><td>${p.plate_color}</td><td>${(p.confidence*100).toFixed(1)}%</td></tr>`;
+      html += `<tr><td><b>${p.plate_code}</b></td><td>${p.plate_color}</td>
+               <td>${(p.confidence*100).toFixed(1)}%</td><td>${sourceLabel(p.source)}</td></tr>`;
     });
     html += '</table>';
   } else { html += '<p style="color:#999;">未识别到车牌</p>'; }
@@ -224,13 +235,16 @@ async function recognizeVideo() {
   const data = await res.json();
   const elapsed = ((Date.now()-start)/1000).toFixed(1);
 
-  let html = `<div class="summary">📹 ${data.filename} | ⏱ 耗时 ${elapsed}s | 
-              抽帧 ${data.processed_frames} 张 | 发现 <b>${data.unique_plates}</b> 个不同车牌</div>`;
+  let html = `<div class="summary">📹 ${data.filename} | ⏱ 耗时 ${elapsed}s |
+              抽帧 ${data.processed_frames} 张 | 车辆区域 ${data.vehicle_regions || 0} 个 |
+              已过滤 ${data.rejected_count || 0} 个候选 |
+              输出 <b>${data.unique_plates}</b> 个稳定车牌</div>`;
   if (data.plates.length) {
-    html += '<table><tr><th>车牌号</th><th>颜色</th><th>置信度</th><th>首现时间</th></tr>';
+    html += '<table><tr><th>轨迹</th><th>车牌号</th><th>颜色</th><th>置信度</th><th>候选数</th><th>出现时间</th></tr>';
     data.plates.forEach(p => {
-      html += `<tr><td><b>${p.plate_code}</b></td><td>${p.plate_color}</td>
-               <td>${(p.confidence*100).toFixed(1)}%</td><td>${p.time_sec}s</td></tr>`;
+      html += `<tr><td>#${p.track_id || '-'}</td><td><b>${p.plate_code}</b></td><td>${p.plate_color}</td>
+               <td>${(p.confidence*100).toFixed(1)}%</td><td>${p.candidate_count || 1}</td>
+               <td>${p.first_time ?? '-'}s - ${p.last_time ?? '-'}s</td></tr>`;
     });
     html += '</table>';
   } else { html += '<p style="color:#999;">未识别到车牌</p>'; }
@@ -243,6 +257,14 @@ async function recognizeVideo() {
 
 # ─── 图片识别 API ────────────────────────────────────────
 
+@app.on_event("startup")
+async def warmup_models():
+    """Move first-request model initialization cost to server startup."""
+    dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+    get_vehicle_model().predict(dummy, classes=[2, 3, 5, 7], imgsz=640, verbose=False)
+    catcher(dummy)
+
+
 @app.post("/recognize")
 async def recognize(file: UploadFile = File(...)):
     """上传图片，返回车牌识别结果"""
@@ -254,23 +276,22 @@ async def recognize(file: UploadFile = File(...)):
         return JSONResponse({"error": "无法解析图片"}, status_code=400)
 
     t0 = time.perf_counter()
-    results = catcher(img)
+    plates, regions, rejected = recognize_with_vehicle_crops(
+        img,
+        catcher,
+        return_rejected=True,
+    )
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
-    plates = []
-    for r in results:
-        plates.append({
-            "plate_code": r[0],
-            "confidence": round(float(r[1]), 4),
-            "plate_type": int(r[2]),
-            "plate_color": PLATE_COLOR_MAP.get(int(r[2]), "未知"),
-            "bbox": [int(v) for v in r[3]],
-        })
+    for plate in plates:
+        plate["plate_color"] = PLATE_COLOR_MAP.get(plate["plate_type"], "未知")
 
     return {
         "filename": file.filename,
         "image_size": f"{img.shape[1]}x{img.shape[0]}",
         "inference_ms": elapsed_ms,
+        "vehicle_regions": sum(1 for region in regions if region.source == "vehicle"),
+        "rejected_count": len(rejected),
         "plate_count": len(plates),
         "plates": plates,
     }
@@ -299,33 +320,34 @@ async def recognize_video(
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration = total_frames / fps if fps > 0 else 0
 
-        # 去重：同车牌只保留最高置信度
-        plate_best = {}
+        tracker = VehiclePlateTracker()
         frame_idx = 0
         processed = 0
+        vehicle_regions = 0
+        rejected_count = 0
+        frame_step = max(1, int(fps * interval)) if fps > 0 else 1
 
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
-            if frame_idx % max(1, int(fps * interval)) == 0:
+            if frame_idx % frame_step == 0:
                 processed += 1
-                timestamp = round(frame_idx / fps, 2)
-                for r in catcher(frame):
-                    code, conf, ptype, bbox = r[0], float(r[1]), int(r[2]), [int(v) for v in r[3]]
-                    if code not in plate_best or conf > plate_best[code]["confidence"]:
-                        plate_best[code] = {
-                            "plate_code": code,
-                            "confidence": round(conf, 4),
-                            "plate_type": ptype,
-                            "plate_color": PLATE_COLOR_MAP.get(ptype, "未知"),
-                            "bbox": bbox,
-                            "time_sec": timestamp,
-                        }
+                timestamp = round(frame_idx / fps, 2) if fps > 0 else 0
+                plates, regions, rejected = recognize_with_vehicle_crops(
+                    frame,
+                    catcher,
+                    return_rejected=True,
+                )
+                vehicle_regions += sum(1 for region in regions if region.source == "vehicle")
+                rejected_count += len(rejected)
+                for plate in plates:
+                    plate["plate_color"] = PLATE_COLOR_MAP.get(plate["plate_type"], "未知")
+                tracker.update(regions, plates, timestamp)
             frame_idx += 1
         cap.release()
 
-        plates = sorted(plate_best.values(), key=lambda x: x["time_sec"])
+        plates = tracker.final_results()
 
         return {
             "filename": file.filename,
@@ -334,6 +356,8 @@ async def recognize_video(
             "duration_sec": round(duration, 1),
             "sample_interval_sec": interval,
             "processed_frames": processed,
+            "vehicle_regions": vehicle_regions,
+            "rejected_count": rejected_count,
             "unique_plates": len(plates),
             "plates": plates,
         }
