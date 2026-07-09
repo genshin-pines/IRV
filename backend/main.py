@@ -1,95 +1,43 @@
-"""
-FastAPI 应用入口
-@owner 成员D (主) + 成员E (告警/日志部分)
+from __future__ import annotations
 
-启动:
-  cd 项目根目录
-  uvicorn backend.main:app --reload
-  → http://localhost:8000
-  → Swagger 文档: http://localhost:8000/docs
-"""
-
-import sys
-from pathlib import Path
-
-# 确保项目根目录在 sys.path 中，以便 import alert_agent
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import logging
-import time
 from contextlib import asynccontextmanager
+from pathlib import Path
+import sys
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import SQLModel, create_engine
 
-from backend.schemas.common import fail
+from backend.schemas.common import ok, fail
 
-from backend.config import DATABASE_URL, LOG_LEVEL, EVENT_BUS_WINDOW_SECONDS, FUSION_DEDUP_MS, FUSION_LLM_ENABLED
-from backend.routers import alerts_router, broadcast_alert
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+if str(PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_DIR))
+
+from alert_agent.scheduler import agent_status, start_scheduler, stop_scheduler
+from backend.database import init_db
+from backend.middleware.logging_mw import RequestLoggingMiddleware
+from backend.routers import alerts_router, ws_manager
 from backend.services.log_service import setup_log_collector
-from backend.services.alert_service import setup_alert_agent, stop_alert_agent, setup_fusion_engine, stop_fusion_engine, get_event_bus, get_fusion_agent
-
-# ── 日志 ──────────────────────────────────────────────
-logging.basicConfig(level=getattr(logging, LOG_LEVEL.upper(), logging.INFO))
-
-# ── 数据库 ────────────────────────────────────────────
-engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
 
 
-# ── 生命周期 ──────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用启动/关闭"""
-    # Startup
-    SQLModel.metadata.create_all(engine)
+    init_db()
     setup_log_collector()
-    await setup_alert_agent(engine, ws_broadcast=broadcast_alert)
-    await setup_fusion_engine(
-        engine=engine,
-        ws_broadcast=broadcast_alert,
-        use_llm=FUSION_LLM_ENABLED,
-        window_seconds=EVENT_BUS_WINDOW_SECONDS,
-        dedup_ms=FUSION_DEDUP_MS,
-    )
-    logging.getLogger("backend").info("Backend 已启动 — Swagger: http://localhost:8000/docs")
+    start_scheduler(broadcast=ws_manager.broadcast)
     yield
-    # Shutdown
-    await stop_fusion_engine()
-    await stop_alert_agent()
+    await stop_scheduler()
 
 
-# ── App ───────────────────────────────────────────────
 app = FastAPI(
-    title="IRV — Intelligent Road Vision",
-    description="智能车载交互与监控系统 API",
-    version="0.1.0",
+    title="IRV Intelligent Road Vision",
+    description="Agent 日志监控与智能预警模块",
+    version="1.0.0",
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
 )
-
-# 请求日志中间件（成员E）— 只拦截 HTTP，不影响 WebSocket
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    t0 = time.perf_counter()
-    response = await call_next(request)
-    elapsed_ms = round((time.perf_counter() - t0) * 1000)
-
-    logger = logging.getLogger("api_server")
-    if response.status_code >= 500:
-        logger.error(f"{request.method} {request.url.path} → {response.status_code} {elapsed_ms}ms")
-    elif response.status_code >= 400:
-        logger.warning(f"{request.method} {request.url.path} → {response.status_code} {elapsed_ms}ms")
-    elif elapsed_ms > 2000:
-        logger.warning(f"请求超时: {request.method} {request.url.path}, 耗时: {elapsed_ms}ms")
-    else:
-        logger.info(f"{request.method} {request.url.path} → {response.status_code} {elapsed_ms}ms")
-    return response
-
-# CORS（允许前端跨域访问）
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -125,23 +73,21 @@ async def not_found_handler(request: Request, exc):
 app.include_router(alerts_router)
 
 
-# ── 健康检查 ──────────────────────────────────────────
 @app.get("/api/health")
 def health():
-    from backend.services.alert_service import get_agent
-    from backend.services.alert_service import get_fusion_agent as _get_fa, get_event_bus as _get_eb
-    agent = get_agent()
-    fusion = _get_fa()
-    bus = _get_eb()
-    return ok(data={
-        "status": "ok",
-        "agent": agent.status if agent else None,
-        "fusion_agent": fusion.status if fusion else None,
-        "event_bus": bus.stats if bus else None,
-    })
+    result = {"status": "ok", "agent": agent_status()}
+    try:
+        from backend.services.alert_service import get_fusion_agent, get_event_bus
+        fusion = get_fusion_agent()
+        bus = get_event_bus()
+        result["fusion_agent"] = fusion.status if fusion else None
+        result["event_bus"] = bus.stats if bus else None
+    except Exception:
+        pass
+    return ok(data=result)
 
 
-# ── 入口 ──────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
