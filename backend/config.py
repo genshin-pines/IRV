@@ -16,9 +16,18 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 AGENT_POLL_INTERVAL_SEC = int(os.getenv("AGENT_POLL_INTERVAL_SEC", "3"))
 LOG_COLLECTOR_CAPACITY = int(os.getenv("LOG_COLLECTOR_CAPACITY", "2000"))
 
-# ── LLM（告警 & 融合推理）────────────────────────────
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+# ── LLM 通用配置（支持任何 OpenAI 兼容接口） ──────────
+# 只需设置 LLM_API_KEY + LLM_BASE_URL + LLM_MODEL
+# 示例:
+#   DeepSeek:  LLM_BASE_URL=https://api.deepseek.com/v1          LLM_MODEL=deepseek-chat
+#   Kimi:      LLM_BASE_URL=https://api.moonshot.cn/v1           LLM_MODEL=moonshot-v1-8k
+#   GPT-4o:    LLM_BASE_URL=https://api.openai.com/v1            LLM_MODEL=gpt-4o
+#   Qwen:      LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1  LLM_MODEL=qwen-plus
+#   GLM:       LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4 LLM_MODEL=glm-4
+#   Ollama:    LLM_BASE_URL=http://localhost:11434/v1            LLM_MODEL=llama3
+#   vLLM:      LLM_BASE_URL=http://localhost:8000/v1             LLM_MODEL=your-model
+LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("DEEPSEEK_API_KEY", ""))
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
 LLM_TIMEOUT_SEC = float(os.getenv("LLM_TIMEOUT_SEC", "15"))
 

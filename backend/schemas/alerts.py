@@ -23,6 +23,7 @@ class AlertBase(BaseModel):
     source_module: str = Field(default="system", examples=["camera"])
     raw_log: str = ""
     llm_summary: str = ""
+    ai_generated: bool = False
     status: AlertStatus = AlertStatus.UNREAD
 
     @field_validator("level", mode="before")

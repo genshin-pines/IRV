@@ -40,10 +40,11 @@ class LLMConfig:
 # ─── 预置 Provider 配置 ──────────────────────────────────────
 
 PRESET_PROVIDERS: Dict[str, LLMConfig] = {
+    # ── 预置 Provider（开箱即用） ──
     "deepseek": LLMConfig(
         base_url="https://api.deepseek.com/v1",
         api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
-        model="deepseek-v4-flash",  # DeepSeek-V4-flash
+        model="deepseek-chat",
         temperature=0.3,
         max_tokens=4096,
     ),
@@ -58,6 +59,14 @@ PRESET_PROVIDERS: Dict[str, LLMConfig] = {
         base_url="https://api.openai.com/v1",
         api_key=os.environ.get("OPENAI_API_KEY", ""),
         model="gpt-4o",
+        temperature=0.3,
+        max_tokens=4096,
+    ),
+    # ── 通用 Provider：从 LLM_* 环境变量读取，适配任何 OpenAI 兼容接口 ──
+    "custom": LLMConfig(
+        base_url=os.environ.get("LLM_BASE_URL", ""),
+        api_key=os.environ.get("LLM_API_KEY", ""),
+        model=os.environ.get("LLM_MODEL", ""),
         temperature=0.3,
         max_tokens=4096,
     ),
@@ -93,10 +102,15 @@ def get_config(provider: str = "deepseek", api_key: Optional[str] = None) -> LLM
 
     if not config.api_key:
         env_var = f"{provider_lower.upper()}_API_KEY"
+        if provider_lower == "custom":
+            raise ValueError(
+                "未找到 LLM API Key。请设置环境变量 LLM_API_KEY。\n"
+                "本地模型（Ollama/vLLM）可设为任意值占位：$env:LLM_API_KEY = 'ollama'"
+            )
         raise ValueError(
             f"未找到 {provider} 的 API Key。"
             f"请设置环境变量 {env_var} 或传入 api_key 参数。\n"
-            f"例如: $env:{env_var} = 'your-key'"
+            f"或使用通用模式: provider='custom' + LLM_API_KEY/LLM_BASE_URL/LLM_MODEL 环境变量"
         )
 
     return config

@@ -6,7 +6,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import re
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from backend.config import LOG_FILE, LOG_LEVEL, LOG_COLLECTOR_CAPACITY
 
@@ -22,6 +22,7 @@ class MemoryLogHandler(logging.Handler):
         self._seq = 0
         self._last_read_seq = 0
         self._lock = threading.Lock()
+        self.on_emit: Callable[[], None] | None = None  # 事件驱动回调
 
     def emit(self, record: logging.LogRecord) -> None:
         with self._lock:
@@ -35,6 +36,13 @@ class MemoryLogHandler(logging.Handler):
                 "raw": self.format(record),
             }
             self._items.append(entry)
+        # 事件驱动：通知 Agent 有新日志
+        cb = self.on_emit
+        if cb is not None:
+            try:
+                cb()
+            except Exception:
+                pass
 
     def query(
         self,

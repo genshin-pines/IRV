@@ -16,6 +16,7 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from alert_agent.scheduler import agent_status, start_scheduler, stop_scheduler
+from backend.config import EVENT_BUS_WINDOW_SECONDS, FUSION_DEDUP_MS, FUSION_LLM_ENABLED
 from backend.database import init_db
 from backend.middleware.logging_mw import RequestLoggingMiddleware
 from backend.routers import alerts_router, ws_manager
@@ -27,7 +28,17 @@ async def lifespan(app: FastAPI):
     init_db()
     setup_log_collector()
     start_scheduler(broadcast=ws_manager.broadcast)
+    # 初始化融合引擎（EventBus + FusionAgent）
+    from backend.services.alert_service import setup_fusion_engine
+    await setup_fusion_engine(
+        ws_broadcast=ws_manager.broadcast,
+        use_llm=FUSION_LLM_ENABLED,
+        window_seconds=EVENT_BUS_WINDOW_SECONDS,
+        dedup_ms=FUSION_DEDUP_MS,
+    )
     yield
+    from backend.services.alert_service import stop_fusion_engine
+    await stop_fusion_engine()
     await stop_scheduler()
 
 

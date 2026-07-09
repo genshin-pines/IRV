@@ -223,7 +223,7 @@ async def setup_fusion_engine(
     """
     global _event_bus, _fusion_agent
 
-    from backend.config import DEEPSEEK_API_KEY
+    from backend.config import LLM_API_KEY
     from fusion import AsyncEventBus, FusionAgent
 
     # 创建事件总线
@@ -232,10 +232,10 @@ async def setup_fusion_engine(
 
     # 创建 LLM 客户端
     llm_client = None
-    if use_llm and DEEPSEEK_API_KEY:
+    if use_llm and LLM_API_KEY:
         try:
             from alert_agent.llm_client import create_client
-            llm_client = create_client("deepseek", api_key=DEEPSEEK_API_KEY)
+            llm_client = create_client("deepseek", api_key=LLM_API_KEY)
             logger.info("Fusion LLM 客户端就绪: deepseek")
         except Exception as e:
             logger.warning(f"Fusion LLM 客户端创建失败，降级为纯规则模式: {e}")
