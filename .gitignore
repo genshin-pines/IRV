@@ -1,0 +1,12 @@
+﻿.env
+*.db
+__pycache__/
+*.pyc
+.venv/
+venv/
+uploads/*
+!uploads/.gitkeep
+logs/*
+!logs/.gitkeep
+.pytest_cache/
+.coverage

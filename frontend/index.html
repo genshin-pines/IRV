@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IRV 智能车载视觉系统</title>
+  <style>
+    :root{--bg:#f5f7fb;--card:rgba(255,255,255,.86);--ink:#172033;--muted:#647084;--line:rgba(30,41,59,.1);--teal:#0f9f8f;--blue:#3c74d8;--coral:#ef6f5e;--shadow:0 18px 50px rgba(31,45,71,.12);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",sans-serif;color:var(--ink);background:var(--bg)}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 18% 0,rgba(15,159,143,.14),transparent 30%),radial-gradient(circle at 88% 8%,rgba(239,111,94,.12),transparent 26%),linear-gradient(180deg,#f8fafc,#eef3f7)}[v-cloak]{display:none}.app{min-height:100vh;padding:18px}.shell{max-width:1480px;margin:0 auto;display:grid;grid-template-columns:288px minmax(0,1fr);gap:18px}.sidebar,.hero,.panel,.metric,.tile,.result,.alert-row,.quick{border:1px solid var(--line);background:var(--card);backdrop-filter:blur(22px);box-shadow:var(--shadow)}.sidebar{position:sticky;top:18px;height:calc(100vh - 36px);border-radius:24px;padding:18px;display:flex;flex-direction:column;gap:16px;overflow:auto}.brand{display:flex;gap:12px;align-items:center;padding:8px 4px 16px;border-bottom:1px solid var(--line)}.mark,.ico{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;color:#fff;background:linear-gradient(135deg,var(--teal),var(--blue))}.brand h1{margin:0;font-size:18px}.brand p,.hint{margin:4px 0 0;color:var(--muted);font-size:13px;line-height:1.55}.role{border:1px solid var(--line);border-radius:18px;padding:14px;display:flex;gap:12px;cursor:pointer;background:rgba(255,255,255,.62);transition:.2s}.role:hover,.role.on{transform:translateY(-1px);border-color:rgba(15,159,143,.35);background:#fff}.role h2{margin:0;font-size:15px}.role p{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.45}.status{margin-top:auto;display:grid;gap:10px}.status div{border-radius:16px;background:rgba(245,247,251,.82);padding:12px;display:flex;justify-content:space-between;gap:10px}.status span{color:var(--muted);font-size:12px}.status b{font-size:13px;text-align:right}.main{display:flex;flex-direction:column;gap:18px;min-width:0}.hero{min-height:208px;border-radius:28px;padding:22px;display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:18px;overflow:hidden}.hero h2{margin:12px 0 0;font-size:clamp(27px,3vw,48px);line-height:1.06}.hero p{margin:14px 0 0;max-width:780px;color:var(--muted);line-height:1.75}.actions{margin-top:22px;display:flex;flex-wrap:wrap;gap:10px}.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-content:end}.metric{border-radius:18px;padding:16px;min-height:92px;box-shadow:none}.metric span{color:var(--muted);font-size:12px}.metric strong{display:block;margin-top:10px;font-size:26px;line-height:1}.grid,.driver{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(360px,.9fr);gap:18px;align-items:start}.panel{border-radius:24px;padding:18px;min-width:0}.head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;margin-bottom:14px}.title{display:flex;gap:12px;align-items:center;min-width:0}.title h3{margin:0;font-size:18px}.line{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.line>.n-select,.line>.n-input{min-width:240px;flex:1 1 260px}.video{position:relative;margin-top:12px;border-radius:20px;overflow:hidden;background:#101827;aspect-ratio:16/9;border:1px solid rgba(15,23,42,.08)}.video img{width:100%;height:100%;object-fit:cover;display:block}.overlay{position:absolute;left:14px;right:14px;bottom:14px;display:flex;justify-content:space-between;gap:12px;color:#fff;font-size:12px}.overlay span{min-width:0;max-width:48%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:rgba(15,23,42,.62);border:1px solid rgba(255,255,255,.16);border-radius:999px;padding:7px 10px;backdrop-filter:blur(14px)}.tiles,.quick-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px}.tile,.quick{border-radius:16px;padding:13px;box-shadow:none;cursor:pointer;transition:.2s;background:#fff}.tile.on,.tile:hover,.quick:hover{border-color:rgba(15,159,143,.42);transform:translateY(-1px)}.tile b,.tile span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tile span{color:var(--muted);font-size:12px;margin-top:5px}.result{border-radius:18px;padding:14px;box-shadow:none;background:#fff;overflow:auto;max-height:340px}.result pre{margin:0;white-space:pre-wrap;word-break:break-word;color:#24324a;font-size:12px;line-height:1.65}.chart{width:100%;height:260px}.quick{display:flex;gap:10px;align-items:center}.vehicle{display:grid;gap:12px}.vehicle-row{display:flex;justify-content:space-between;align-items:center;gap:14px;border-radius:16px;padding:12px;background:rgba(245,247,251,.82)}.vehicle-row label{color:var(--muted);font-size:13px}.alert-list{display:grid;gap:10px;max-height:410px;overflow:auto;padding-right:4px}.alert-row{border-radius:16px;padding:12px;box-shadow:none;background:#fff}.alert-row header{display:flex;justify-content:space-between;gap:10px;align-items:center}.alert-row strong{font-size:14px}.alert-row p{margin:8px 0 0;color:var(--muted);font-size:12px;line-height:1.55}.drop{min-height:128px;border:1px dashed rgba(23,32,51,.22);border-radius:18px;display:grid;place-items:center;text-align:center;padding:18px;background:rgba(255,255,255,.54);cursor:pointer}.hidden{display:none}svg.lucide{width:18px;height:18px;stroke-width:2}.mark svg,.ico svg{width:21px;height:21px}@media(max-width:1120px){.shell{grid-template-columns:1fr}.sidebar{position:static;height:auto}.hero,.grid,.driver{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:720px){.app{padding:10px}.hero,.panel,.sidebar{border-radius:20px;padding:14px}.metrics,.quick-list{grid-template-columns:repeat(2,minmax(0,1fr))}.overlay{flex-direction:column}.overlay span{max-width:100%}.line>.n-select,.line>.n-input{min-width:100%}}
+  </style>
+</head>
+<body>
+  <div id="app" v-cloak>
+    <n-config-provider :theme-overrides="theme">
+      <n-message-provider>
+        <div class="app">
+          <div class="shell">
+            <aside class="sidebar">
+              <div class="brand"><div class="mark"><i data-lucide="radar"></i></div><div><h1>IRV 控制台</h1><p>车牌识别、手势控车、Agent 告警</p></div></div>
+              <section class="role" :class="{on:role==='admin'}" @click="setRole('admin')"><div class="ico"><i data-lucide="building-2"></i></div><div><h2>管理者端</h2><p>停车场与交通管理视角，聚焦摄像头和车牌记录。</p></div></section>
+              <section class="role" :class="{on:role==='driver'}" @click="setRole('driver')"><div class="ico"><i data-lucide="car-front"></i></div><div><h2>车主端</h2><p>驾驶辅助与车内交互视角，聚合外部视频流与本机摄像头。</p></div></section>
+              <div class="status">
+                <div><span>Agent</span><b>{{agentRunning?'运行中':'未启动'}}</b></div>
+                <div><span>摄像头</span><b>{{cameras.length}} 路</b></div>
+                <div><span>当前身份</span><b>{{role==='admin'?'管理者':'车主'}}</b></div>
+                <div><span>手势流</span><b>{{gesture.running?'运行中':'待启动'}}</b></div>
+              </div>
+            </aside>
+            <main class="main">
+              <section class="hero">
+                <div>
+                  <n-tag round :bordered="false" type="success">{{health.status||'connecting'}}</n-tag>
+                  <h2>{{heroTitle}}</h2><p>{{heroText}}</p>
+                  <div class="actions">
+                    <n-button type="primary" @click="primaryAction"><template #icon><i :data-lucide="role==='admin'?'scan-line':'video'"></i></template>{{role==='admin'?'识别当前画面':'启动本机摄像头'}}</n-button>
+                    <n-button secondary @click="simulateAlert"><template #icon><i data-lucide="shield-alert"></i></template>模拟告警</n-button>
+                    <n-button tertiary @click="refreshAll"><template #icon><i data-lucide="refresh-cw"></i></template>刷新状态</n-button>
+                  </div>
+                </div>
+                <div class="metrics">
+                  <div class="metric"><span>识别车牌</span><strong>{{plateCount}}</strong></div>
+                  <div class="metric"><span>告警总数</span><strong>{{alertTotal}}</strong></div>
+                  <div class="metric"><span>当前画面</span><strong style="font-size:17px">{{cameraName||'未选择'}}</strong></div>
+                  <div class="metric"><span>控车音量</span><strong>{{vehicle.volume}}</strong></div>
+                </div>
+              </section>
+
+              <section v-show="role==='admin'" class="grid">
+                <div class="panel">
+                  <div class="head"><div class="title"><div class="ico"><i data-lucide="cctv"></i></div><div><h3>监管视频与车牌识别</h3><p class="hint">选择一路视频流，查看画面并抽帧识别车牌。</p></div></div><n-button size="small" secondary @click="snapshotCamera"><template #icon><i data-lucide="camera"></i></template>快照</n-button></div>
+                  <n-skeleton v-if="loading.cameras" text :repeat="4"></n-skeleton>
+                  <template v-else>
+                    <div class="line"><n-select v-model:value="selectedCameraId" :options="cameraOptions" @update:value="showCamera"></n-select><n-button secondary @click="showCamera"><template #icon><i data-lucide="play"></i></template>查看画面</n-button><n-button type="primary" :loading="loading.plateStream" @click="runPlateStream"><template #icon><i data-lucide="scan-line"></i></template>自动识别</n-button></div>
+                    <div class="video"><img :src="cameraViewUrl" alt="沙盘摄像头画面"><div class="overlay"><span>{{cameraName||'未选择摄像头'}}</span><span>{{cameraUrl||'等待输入'}}</span></div></div>
+                    <div class="tiles"><div v-for="camera in cameras" :key="camera.id" class="tile" :class="{on:selectedCameraId===camera.id}" @click="selectCamera(camera.id)"><b>{{camera.name}}</b><span>{{camera.id}}</span></div></div>
+                  </template>
+                </div>
+                <div class="panel"><div class="head"><div class="title"><div class="ico"><i data-lucide="list-checks"></i></div><div><h3>车牌识别结果</h3><p class="hint">停车、通行与违章线索记录。</p></div></div></div><div class="result"><pre>{{pretty(plateResult)}}</pre></div></div>
+                <div class="panel"><div class="head"><div class="title"><div class="ico"><i data-lucide="bar-chart-3"></i></div><div><h3>告警分布</h3><p class="hint">最近告警按级别汇总。</p></div></div></div><div ref="adminChart" class="chart"></div></div>
+                <div class="panel"><div class="head"><div class="title"><div class="ico"><i data-lucide="bell"></i></div><div><h3>Agent 告警中心</h3><p class="hint">系统运行状态与识别结果流。</p></div></div><n-button size="small" secondary @click="loadAlerts"><template #icon><i data-lucide="rotate-cw"></i></template>更新</n-button></div><div class="line" style="margin-bottom:12px"><n-select v-model:value="scenario" :options="scenarioOptions"></n-select><n-button type="primary" @click="simulateAlert"><template #icon><i data-lucide="send"></i></template>触发</n-button></div><div class="alert-list"><div v-for="item in alerts" :key="item.id||item.created_at" class="alert-row"><header><strong>{{item.title||item.rule_name||'告警事件'}}</strong><n-tag size="small" :type="tagType(item.severity)">{{item.severity||'info'}}</n-tag></header><p>{{item.summary||item.message||item.reason||'暂无说明'}}</p></div><n-empty v-if="!alerts.length" description="暂无告警"></n-empty></div></div>
+              </section>
+
+              <section v-show="role==='driver'" class="driver">
+                <div class="panel">
+                  <div class="head"><div class="title"><div class="ico"><i data-lucide="hand"></i></div><div><h3>车主手势控车</h3><p class="hint">本机摄像头作为车内输入，镜像预览更接近前置摄像头体验。</p></div></div><n-tag round :type="gesture.running?'success':'default'">{{gesture.running?'运行中':'未启动'}}</n-tag></div>
+                  <div class="line"><n-input-number v-model:value="cameraIndex" :min="0" :max="10" placeholder="摄像头编号"></n-input-number><n-switch v-model:value="gestureMirror"><template #checked>镜像</template><template #unchecked>原始</template></n-switch></div>
+                  <div class="line" style="margin-top:12px"><n-button type="primary" :loading="loading.gesture" @click="startGestureWebcam"><template #icon><i data-lucide="video"></i></template>启动本机摄像头</n-button><n-button secondary :loading="loading.gesture" @click="startGestureRtsp"><template #icon><i data-lucide="radio"></i></template>启动外部视频流</n-button><n-button tertiary type="error" @click="stopGesture"><template #icon><i data-lucide="square"></i></template>停止</n-button></div>
+                  <n-input v-model:value="gestureSrc" placeholder="外部视频流地址" style="margin-top:12px"></n-input>
+                  <div class="video"><img :src="gestureViewUrl" alt="手势识别画面"><div class="overlay"><span>车内摄像头模拟输入</span><span>{{gestureMirror?'镜像显示':'原始方向'}}</span></div></div>
+                  <div class="quick-list"><div v-for="q in quickGestures" :key="q.type" class="quick" @click="sendGesture(q.type,q.label)"><i :data-lucide="q.icon"></i><span>{{q.short}}</span></div></div>
+                </div>
+                <div class="panel"><div class="head"><div class="title"><div class="ico"><i data-lucide="sliders-horizontal"></i></div><div><h3>模拟车辆控制</h3><p class="hint">手势事件映射为车辆状态。</p></div></div></div><div class="vehicle"><div class="vehicle-row"><label>音量</label><n-slider v-model:value="vehicle.volume" :min="0" :max="100" style="max-width:210px"></n-slider></div><div class="vehicle-row"><label>温度</label><n-input-number v-model:value="vehicle.temperature" :min="16" :max="30"></n-input-number></div><div class="vehicle-row"><label>车窗</label><n-switch v-model:value="vehicle.window"><template #checked>开启</template><template #unchecked>关闭</template></n-switch></div><div class="vehicle-row"><label>灯光</label><n-switch v-model:value="vehicle.light"><template #checked>开启</template><template #unchecked>关闭</template></n-switch></div></div></div>
+                <div class="panel"><div class="head"><div class="title"><div class="ico"><i data-lucide="shield-alert"></i></div><div><h3>驾驶辅助告警</h3><p class="hint">Agent 处理置信度、摄像头与接口异常。</p></div></div></div><div ref="driverChart" class="chart"></div></div>
+              </section>
+
+              <section class="grid">
+                <div class="panel"><div class="head"><div class="title"><div class="ico"><i data-lucide="upload-cloud"></i></div><div><h3>文件识别测试</h3><p class="hint">图片或视频文件直连车牌识别 API。</p></div></div><n-button tertiary @click="chooseFile"><template #icon><i data-lucide="folder-open"></i></template>选择文件</n-button></div><input ref="fileInput" class="hidden" type="file" accept="image/*,video/*" @change="onFile"><div class="drop" @click="chooseFile"><div><strong>{{fileName||'未选择文件'}}</strong><p class="hint">点击区域选择样例图片或视频</p></div></div><div class="line" style="margin-top:12px"><n-button type="primary" :loading="loading.plateImage" @click="recognizePlateImage"><template #icon><i data-lucide="image"></i></template>识别图片</n-button><n-button secondary :loading="loading.plateVideo" @click="recognizePlateVideo"><template #icon><i data-lucide="film"></i></template>识别视频</n-button></div></div>
+                <div class="panel"><div class="head"><div class="title"><div class="ico"><i data-lucide="file-json"></i></div><div><h3>接口返回</h3><p class="hint">最近一次文件识别结果。</p></div></div></div><div class="result"><pre>{{pretty(plateUploadResult)}}</pre></div></div>
+              </section>
+            </main>
+          </div>
+        </div>
+      </n-message-provider>
+    </n-config-provider>
+  </div>
+  <script src="/static/vendor/vue.global.prod.js"></script>
+  <script src="/static/vendor/naive-ui.prod.js"></script>
+  <script src="/static/vendor/echarts.min.js"></script>
+  <script src="/static/vendor/anime.min.js"></script>
+  <script src="/static/vendor/lucide.min.js"></script>
+  <script>
+    const {createApp,ref,reactive,computed,onMounted,nextTick,watch}=Vue;
+    const placeholder='data:image/svg+xml;charset=UTF-8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><rect width="100%" height="100%" fill="#101827"/><text x="50%" y="50%" fill="#cbd5e1" font-size="30" font-family="Arial" text-anchor="middle">IRV Video Preview</text></svg>');
+    createApp({setup(){
+      const message={success(){},warning(){},error(){}},role=ref('admin'),health=reactive({ok:false,status:'connecting',agent:null}),cameras=ref([]),selectedCameraId=ref('live1'),cameraViewUrl=ref(placeholder);
+      const plateResult=ref(null),plateUploadResult=ref(null),plateFile=ref(null),fileName=ref(''),fileInput=ref(null),alerts=ref([]),alertTotal=ref(0),scenario=ref('plate_low_conf');
+      const gesture=reactive({running:false}),gestureSrc=ref('rtsp://10.126.59.120:8554/live/live1'),cameraIndex=ref(0),gestureMirror=ref(true),gestureViewUrl=ref(placeholder),gestureResult=ref(null);
+      const vehicle=reactive({volume:42,temperature:22,window:false,light:true}),adminChart=ref(null),driverChart=ref(null),loading=reactive({cameras:false,plateStream:false,plateImage:false,plateVideo:false,gesture:false});
+      let adminChartInstance=null,driverChartInstance=null;
+      const theme={common:{primaryColor:'#0f9f8f',primaryColorHover:'#0b8d80',primaryColorPressed:'#087468',borderRadius:'14px'},Button:{borderRadiusMedium:'14px',heightMedium:'38px'},Input:{borderRadius:'14px'}};
+      const scenarioOptions=[{label:'车牌低置信度',value:'plate_low_conf'},{label:'摄像头断开',value:'camera_disconnect'},{label:'手势跳变',value:'gesture_jitter'},{label:'接口超时',value:'api_timeout'},{label:'登录失败',value:'login_failed'}];
+      const quickGestures=[{type:'open_palm',label:'启动/唤醒',short:'启动',icon:'power'},{type:'fist',label:'确认/执行',short:'确认',icon:'check'},{type:'circle',label:'调节音量',short:'音量',icon:'volume-2'},{type:'swipe_left',label:'切换功能',short:'左滑',icon:'skip-back'},{type:'swipe_right',label:'切换功能',short:'右滑',icon:'skip-forward'},{type:'wave',label:'返回主页',short:'主页',icon:'home'}];
+      const selectedCamera=computed(()=>cameras.value.find(i=>i.id===selectedCameraId.value)),cameraOptions=computed(()=>cameras.value.map(i=>({label:`${i.name} · ${i.id}`,value:i.id})));
+      const agentRunning=computed(()=>!!(health.agent&&health.agent.running)),cameraName=computed(()=>selectedCamera.value?.name||''),cameraUrl=computed(()=>selectedCamera.value?.rtsp_url||'');
+      const heroTitle=computed(()=>role.value==='admin'?'交通管理与停车场车牌监管台':'车主驾驶辅助与车内手势座舱');
+      const heroText=computed(()=>role.value==='admin'?'管理者端聚焦道路与停车场视频流。切换画面后可抽帧识别车牌，并将摄像头异常、低置信度和识别失败交给 Agent 解释与告警。':'车主端使用沙盘视频流模拟车外摄像头，本机前置摄像头模拟车内摄像头，承载车牌记录、交警手势辅助和非接触式车辆控制。');
+      const plateCount=computed(()=>{const d=plateResult.value?.data||plateUploadResult.value?.data;return d?.unique_plates??d?.plate_count??0});
+      function icons(){nextTick(()=>window.lucide?.createIcons())}function motion(){nextTick(()=>window.anime?.({targets:'.panel,.hero,.role',opacity:[0,1],translateY:[10,0],delay:window.anime.stagger(35),duration:420,easing:'easeOutQuad'}))}
+      async function api(url,opt){const r=await fetch(url,opt),t=await r.text();let d=null;try{d=t?JSON.parse(t):null}catch{d={raw:t}}if(!r.ok)throw{status:r.status,data:d};return d}
+      function pretty(v){return v?JSON.stringify(v,null,2):'等待结果'}function tagType(s){return s==='critical'||s==='error'?'error':s==='warning'?'warning':'info'}function setRole(v){role.value=v;icons();motion();drawCharts()}function primaryAction(){role.value==='admin'?runPlateStream():startGestureWebcam()}
+      async function loadHealth(){try{Object.assign(health,await api('/api/health'))}catch{health.status='offline'}}
+      async function loadCameras(){loading.cameras=true;try{const r=await api('/api/cameras');cameras.value=r.data||[];if(!cameras.value.some(i=>i.id===selectedCameraId.value)&&cameras.value[0])selectedCameraId.value=cameras.value[0].id}finally{loading.cameras=false;icons()}}
+      async function loadAlerts(){try{const r=await api('/api/alerts'),list=Array.isArray(r.data)?r.data:(r.data?.items||[]);alerts.value=list.slice(0,8);alertTotal.value=r.total??r.data?.total??list.length}catch{alerts.value=[]}drawCharts()}
+      async function refreshAll(){await Promise.all([loadHealth(),loadCameras(),loadAlerts()]);message.success('状态已刷新')}function selectCamera(id){selectedCameraId.value=id;showCamera()}function showCamera(){if(selectedCameraId.value)cameraViewUrl.value=`/api/cameras/${selectedCameraId.value}/stream?fps=8&width=1080&t=${Date.now()}`}function snapshotCamera(){if(selectedCameraId.value)open(`/api/cameras/${selectedCameraId.value}/snapshot.jpg?t=${Date.now()}`,'_blank')}
+      async function runPlateStream(){if(!selectedCamera.value)return message.warning('请先选择摄像头');loading.plateStream=true;try{plateResult.value=await api('/api/plate/recognize-stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rtsp_url:selectedCamera.value.rtsp_url,duration_sec:8,sample_interval:.6})});message.success('车牌识别完成')}catch(e){plateResult.value=e;message.error('车牌识别失败')}finally{loading.plateStream=false}}
+      function chooseFile(){fileInput.value?.click()}function onFile(e){plateFile.value=e.target.files?.[0]||null;fileName.value=plateFile.value?.name||''}
+      async function recognizePlateImage(){if(!plateFile.value)return message.warning('请先选择文件');loading.plateImage=true;const f=new FormData();f.append('file',plateFile.value);try{plateUploadResult.value=await api('/api/plate/recognize-image',{method:'POST',body:f})}catch(e){plateUploadResult.value=e}finally{loading.plateImage=false}}
+      async function recognizePlateVideo(){if(!plateFile.value)return message.warning('请先选择文件');loading.plateVideo=true;const f=new FormData();f.append('file',plateFile.value);try{plateUploadResult.value=await api('/api/plate/recognize-video?interval=0.8',{method:'POST',body:f})}catch(e){plateUploadResult.value=e}finally{loading.plateVideo=false}}
+      async function startGesture(p){loading.gesture=true;try{const r=await api('/api/gesture/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});gesture.running=!!r.data?.running;gestureResult.value=r;gestureViewUrl.value=`/api/gesture/video-feed?t=${Date.now()}`;message.success('手势识别已启动')}catch(e){gestureResult.value=e;message.error('手势识别启动失败')}finally{loading.gesture=false}}
+      function startGestureWebcam(){startGesture({use_webcam:true,camera_index:Number(cameraIndex.value||0),mirror:gestureMirror.value,src_url:null})}function startGestureRtsp(){startGesture({use_webcam:false,camera_index:Number(cameraIndex.value||0),mirror:gestureMirror.value,src_url:gestureSrc.value})}
+      async function stopGesture(){try{gestureResult.value=await api('/api/gesture/stop',{method:'POST'});gesture.running=false;gestureViewUrl.value=placeholder;message.success('手势识别已停止')}catch(e){gestureResult.value=e}}
+      async function sendGesture(type,label){try{gestureResult.value=await api('/api/gesture/events',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'demo',gesture_type:type,gesture_label:label,confidence:.92,stable:true})});const a=gestureResult.value?.data?.command?.action;if(a==='left')vehicle.light=false;if(a==='right')vehicle.light=true;if(a==='confirm'||type==='circle')vehicle.volume=Math.min(100,vehicle.volume+8);if(a==='home'||type==='wave')vehicle.window=!vehicle.window;message.success(label)}catch(e){gestureResult.value=e}}
+      async function simulateAlert(){try{await api('/api/logs/simulate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:scenario.value})});await loadAlerts();message.success('告警已生成')}catch{message.error('告警模拟失败')}}
+      function drawCharts(){nextTick(()=>{const s={info:0,warning:0,error:0,critical:0};alerts.value.forEach(i=>{const k=i.severity||'info';s[k]=(s[k]||0)+1});if(adminChart.value){adminChartInstance=adminChartInstance||echarts.init(adminChart.value);adminChartInstance.setOption({tooltip:{},grid:{left:28,right:12,top:24,bottom:24},xAxis:{type:'category',data:['信息','警告','错误','严重']},yAxis:{type:'value',minInterval:1},series:[{type:'bar',data:[s.info,s.warning,s.error,s.critical],itemStyle:{borderRadius:[8,8,0,0],color:'#0f9f8f'}}]})}if(driverChart.value){driverChartInstance=driverChartInstance||echarts.init(driverChart.value);driverChartInstance.setOption({tooltip:{trigger:'item'},legend:{bottom:0},series:[{type:'pie',radius:['46%','70%'],center:['50%','42%'],data:[{name:'车牌辅助',value:plateCount.value||1},{name:'手势控车',value:gesture.running?3:1},{name:'Agent',value:Math.max(alertTotal.value,1)}],color:['#0f9f8f','#3c74d8','#ef6f5e']}]})}})}
+      watch([role,alerts,()=>vehicle.volume],()=>{icons();drawCharts()});onMounted(async()=>{icons();motion();await Promise.all([loadHealth(),loadCameras(),loadAlerts()]);drawCharts();icons();addEventListener('resize',()=>{adminChartInstance?.resize();driverChartInstance?.resize()})});
+      return{role,health,cameras,selectedCameraId,cameraViewUrl,plateResult,plateUploadResult,fileName,fileInput,alerts,alertTotal,scenario,scenarioOptions,gesture,gestureSrc,cameraIndex,gestureMirror,gestureViewUrl,gestureResult,vehicle,adminChart,driverChart,loading,theme,quickGestures,selectedCamera,cameraOptions,agentRunning,cameraName,cameraUrl,heroTitle,heroText,plateCount,pretty,tagType,setRole,primaryAction,refreshAll,selectCamera,showCamera,snapshotCamera,runPlateStream,chooseFile,onFile,recognizePlateImage,recognizePlateVideo,startGestureWebcam,startGestureRtsp,stopGesture,sendGesture,simulateAlert,loadAlerts}
+    }}).use(naive).mount('#app');
+  </script>
+</body>
+</html>
