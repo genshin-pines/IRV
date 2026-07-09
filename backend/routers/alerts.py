@@ -163,6 +163,20 @@ def api_log_stats():
 
 
 # ═══════════════════════════════════════════════════════════
+# 飞书通知测试
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/api/notify/test")
+async def api_test_notification(msg: str = "🧪 IRV 告警系统 — 飞书通知连通性测试"):
+    from backend.services.notifier import send_test_message
+    success = await send_test_message(msg)
+    if success:
+        return ok(message="测试消息已发送到飞书群")
+    else:
+        return _err("飞书通知发送失败，请检查配置和日志", 500)
+
+
+# ═══════════════════════════════════════════════════════════
 # 模拟异常日志（开发测试用）
 # ═══════════════════════════════════════════════════════════
 
