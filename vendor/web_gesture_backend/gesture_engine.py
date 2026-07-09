@@ -29,6 +29,24 @@ class GestureEngine:
         self._last_time = time.time()
         self._fps = 0.0
         self.drawer = Drawer()
+        self._last_vertical_action = None
+        self._last_vertical_action_at = 0.0
+        self._opposite_vertical_cooldown_sec = 6.0
+
+    def _should_emit_action(self, event_name, now):
+        up_events = {"SWIPE_UP", "SWIPE_UP2", "SWIPE_UP3", "FAST_SWIPE_UP"}
+        down_events = {"SWIPE_DOWN", "SWIPE_DOWN2", "SWIPE_DOWN3", "FAST_SWIPE_DOWN"}
+        if event_name not in up_events and event_name not in down_events:
+            return True
+
+        direction = "up" if event_name in up_events else "down"
+        opposite = self._last_vertical_action in {"up", "down"} and self._last_vertical_action != direction
+        if opposite and now - self._last_vertical_action_at < self._opposite_vertical_cooldown_sec:
+            return False
+
+        self._last_vertical_action = direction
+        self._last_vertical_action_at = now
+        return True
 
     def process_frame(self, frame):
         now = time.time()
@@ -66,6 +84,9 @@ class GestureEngine:
 
                 if trk['hands'].action is not None:
                     event_name = trk['hands'].action.name
+                    if not self._should_emit_action(event_name, now):
+                        trk['hands'].action = None
+                        continue
                     self.drawer.set_action(trk['hands'].action)
                     msg = make_action_message(event_name)
                     if msg and self.on_action:
