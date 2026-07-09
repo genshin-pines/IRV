@@ -38,5 +38,11 @@ FUSION_LLM_ENABLED = os.getenv("FUSION_LLM_ENABLED", "true").lower() == "true"
 
 # ── 告警通知 ────────────────────────────────────────
 # @owner 成员E
+# 方式一：自定义机器人 Webhook（最简单，只需 URL）
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
 DINGTALK_WEBHOOK_URL = os.getenv("DINGTALK_WEBHOOK_URL", "")
+# 方式二：应用机器人 API（支持 @all、卡片消息等高级功能）
+FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
+FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
+FEISHU_CHAT_ID = os.getenv("FEISHU_CHAT_ID", "")  # 目标群 ID
+FEISHU_NOTIFY_ENABLED = os.getenv("FEISHU_NOTIFY_ENABLED", "false").lower() == "true"

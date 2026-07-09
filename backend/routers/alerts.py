@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Depends
+from fastapi.responses import JSONResponse
 from sqlmodel import Session, create_engine
 
 from backend.config import DATABASE_URL
@@ -27,9 +28,15 @@ from backend.services.alert_service import (
     get_alert_history, get_alert_stats, get_agent,
 )
 from backend.services.log_service import get_recent_logs, get_log_stats, get_collector
+from backend.schemas.common import ok, fail
 
 router = APIRouter(prefix="/api", tags=["告警 & 日志"])
 logger = logging.getLogger(__name__)
+
+
+def _err(message: str, status_code: int = 400, **kwargs) -> JSONResponse:
+    """返回带 HTTP 状态码的统一错误响应"""
+    return JSONResponse(status_code=status_code, content=fail(message, **kwargs))
 
 # ── DB Session（临时，成员D 后续改为 FastAPI Depends 注入） ──
 _engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
@@ -46,12 +53,12 @@ def _get_session():
 def list_alerts(
     level: Optional[str] = Query(None, description="筛选级别: info|warning|critical"),
     hours: int = Query(24, ge=1, le=168, description="最近多少小时"),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=500, description="返回条数上限"),
     session: Session = Depends(_get_session),
-) -> list[dict]:
+):
     """获取告警历史列表"""
     alerts = get_alert_history(session, hours=hours, level=level, limit=limit)
-    return [
+    return ok(data=[
         {
             "id": a.id,
             "level": a.level,
@@ -63,35 +70,37 @@ def list_alerts(
             "created_at": a.created_at.isoformat(),
         }
         for a in alerts
-    ]
+    ])
 
 
 @router.get("/alerts/stats")
-def alert_stats(session: Session = Depends(_get_session)) -> dict:
+def alert_stats(session: Session = Depends(_get_session)):
     """获取告警统计"""
-    return get_alert_stats(session)
+    return ok(data=get_alert_stats(session))
 
 
 @router.get("/alerts/{alert_id}")
 def get_alert(alert_id: int, session: Session = Depends(_get_session)):
     """获取单条告警详情"""
+    if alert_id <= 0:
+        return _err(f"告警 ID 无效: {alert_id}", 400)
     alert = session.get(AlertEvent, alert_id)
     if not alert:
-        return {"error": "告警不存在"}, 404
-    return {
+        return _err(f"告警 {alert_id} 不存在", 404)
+    return ok(data={
         "id": alert.id,
         "level": alert.level,
         "title": alert.title,
         "summary": alert.summary,
         "detail": alert.detail,
         "source_module": alert.source_module,
-        "affected_modules": alert.affected_modules.split(","),
+        "affected_modules": alert.affected_modules.split(",") if alert.affected_modules else [],
         "ai_generated": alert.ai_generated,
         "webhook_markdown": alert.webhook_markdown,
         "acknowledged": alert.acknowledged,
         "acknowledged_at": alert.acknowledged_at.isoformat() if alert.acknowledged_at else None,
         "created_at": alert.created_at.isoformat(),
-    }
+    })
 
 
 @router.post("/alerts/{alert_id}/acknowledge")
@@ -102,15 +111,17 @@ def acknowledge_alert(
 ):
     """确认告警（标记为已处理）"""
     from datetime import datetime, timezone
+    if alert_id <= 0:
+        return _err(f"告警 ID 无效: {alert_id}", 400)
     alert = session.get(AlertEvent, alert_id)
     if not alert:
-        return {"error": "告警不存在"}, 404
+        return _err(f"告警 {alert_id} 不存在", 404)
     alert.acknowledged = True
     alert.acknowledged_at = datetime.now(timezone.utc)
     alert.acknowledged_by = acknowledged_by
     session.add(alert)
     session.commit()
-    return {"ok": True, "alert_id": alert_id}
+    return ok(data={"alert_id": alert_id}, message="告警已确认")
 
 
 # ── 日志查询 ──────────────────────────────────────────
@@ -119,18 +130,18 @@ def acknowledge_alert(
 def list_logs(n: int = Query(50, ge=1, le=500)):
     """获取最近 N 条系统日志"""
     logs = get_recent_logs(n)
-    return [
+    return ok(data=[
         {"seq": e.get("seq"), "timestamp": e["timestamp"],
          "module": e["module"], "level": e["level"],
          "message": e["message"]}
         for e in logs
-    ]
+    ])
 
 
 @router.get("/logs/stats")
 def log_stats():
     """获取日志统计"""
-    return get_log_stats()
+    return ok(data=get_log_stats())
 
 
 # ── 调试：模拟异常日志（仅开发环境） ────────────────────
@@ -197,6 +208,12 @@ def simulate_anomaly_logs(
         ],
     }
 
+    VALID_SCENARIOS = {"error_spike", "plate_low_conf", "camera_disconnect",
+                        "api_timeout", "gesture_jitter", "login_fail", "mixed"}
+
+    if scenario not in VALID_SCENARIOS:
+        return _err(f"未知场景: {scenario}，可选: {', '.join(sorted(VALID_SCENARIOS))}", 400)
+
     if scenario == "mixed":
         entries = []
         for s in ["plate_low_conf", "api_timeout", "camera_disconnect", "gesture_jitter", "login_fail"]:
@@ -208,20 +225,18 @@ def simulate_anomaly_logs(
             result.append(entries[i])
         entries = result
     else:
-        entries = SCENARIOS.get(scenario, SCENARIOS["error_spike"])
+        entries = SCENARIOS[scenario]
         entries = entries[:count]
 
     for module, level, message in entries:
         mod_logger = logging.getLogger(module)
         mod_logger.log(level, message)
 
-    return {
-        "ok": True,
+    return ok(data={
         "scenario": scenario,
         "injected": len(entries),
         "messages": [f"[{m}] [{l}] {msg[:60]}" for m, l, msg in entries],
-        "hint": "等待巡检周期结束后查看 GET /api/alerts",
-    }
+    }, message="等待巡检周期结束后查看 GET /api/alerts")
 
 
 # ── WebSocket 实时告警 ─────────────────────────────────
@@ -301,13 +316,13 @@ async def ingest_perception_event(body: PerceptionEventInput):
 
     bus = get_event_bus()
     if bus is None:
-        return {"ok": False, "error": "EventBus 未初始化"}
+        return _err("EventBus 未初始化", 503)
 
     # 确定模块和事件类型
     try:
         module_enum = Module(body.module)
     except ValueError:
-        return {"ok": False, "error": f"未知模块: {body.module}，可选: plate_recognition/traffic_gesture/driver_gesture"}
+        return _err(f"未知模块: {body.module}，可选: plate_recognition/traffic_gesture/driver_gesture", 400)
 
     # 确定事件类型
     if body.event_type:
@@ -339,7 +354,7 @@ async def ingest_perception_event(body: PerceptionEventInput):
     )
 
     await bus.publish(event)
-    return {"ok": True, "event_id": event.event_id}
+    return ok(data={"event_id": event.event_id})
 
 
 # ═══════════════════════════════════════════════════════════
@@ -372,7 +387,7 @@ async def fusion_status():
         except Exception:
             result["context"] = None
 
-    return result
+    return ok(data=result)
 
 
 @router.get("/latency/stats")
@@ -382,8 +397,8 @@ async def latency_stats():
 
     fusion = get_fusion_agent()
     if fusion is None:
-        return {"error": "FusionAgent 未初始化"}, 404
-    return fusion.latency_stats
+        return _err("FusionAgent 未初始化", 503)
+    return ok(data=fusion.latency_stats)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -410,7 +425,7 @@ async def simulate_perception_events(
 
     bus = get_event_bus()
     if bus is None:
-        return {"ok": False, "error": "EventBus 未初始化"}
+        return _err("EventBus 未初始化", 503)
 
     SCENARIOS = {
         "stop_with_vehicle": [
@@ -476,7 +491,10 @@ async def simulate_perception_events(
         ],
     }
 
-    events_data = SCENARIOS.get(scenario, SCENARIOS["stop_with_vehicle"])
+    PERCEPTION_SCENARIOS = set(SCENARIOS.keys())
+    if scenario not in PERCEPTION_SCENARIOS:
+        return _err(f"未知场景: {scenario}，可选: {', '.join(sorted(PERCEPTION_SCENARIOS))}", 400)
+    events_data = SCENARIOS[scenario]
     published_ids = []
 
     for evt in events_data:
@@ -502,13 +520,11 @@ async def simulate_perception_events(
         await bus.publish(event)
         published_ids.append(event.event_id)
 
-    return {
-        "ok": True,
+    return ok(data={
         "scenario": scenario,
         "published": len(published_ids),
         "event_ids": published_ids,
-        "hint": "融合引擎将自动处理这些事件，查看 GET /api/fusion/status 获取结果",
-    }
+    }, message="融合引擎将自动处理这些事件，查看 GET /api/fusion/status 获取结果")
 
 
 def _simplify_context(ctx: dict) -> dict:

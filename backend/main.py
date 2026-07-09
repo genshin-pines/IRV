@@ -20,8 +20,12 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import SQLModel, create_engine
+
+from backend.schemas.common import fail
 
 from backend.config import DATABASE_URL, LOG_LEVEL, EVENT_BUS_WINDOW_SECONDS, FUSION_DEDUP_MS, FUSION_LLM_ENABLED
 from backend.routers import alerts_router, broadcast_alert
@@ -93,6 +97,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── 异常处理器：统一错误格式 ──────────────────────────
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """FastAPI 参数校验失败 → 统一格式 422"""
+    errors = []
+    for err in exc.errors():
+        loc = " → ".join(str(x) for x in err["loc"])
+        errors.append(f"{loc}: {err['msg']}")
+    return JSONResponse(
+        status_code=422,
+        content=fail(message="请求参数校验失败", data={"detail": "; ".join(errors)}),
+    )
+
+
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    """FastAPI 路由未找到 → 统一格式 404"""
+    return JSONResponse(
+        status_code=404,
+        content=fail(message=f"接口不存在: {request.method} {request.url.path}"),
+    )
+
+
 # 注册路由
 app.include_router(alerts_router)
 
@@ -105,12 +133,12 @@ def health():
     agent = get_agent()
     fusion = _get_fa()
     bus = _get_eb()
-    return {
+    return ok(data={
         "status": "ok",
         "agent": agent.status if agent else None,
         "fusion_agent": fusion.status if fusion else None,
         "event_bus": bus.stats if bus else None,
-    }
+    })
 
 
 # ── 入口 ──────────────────────────────────────────────

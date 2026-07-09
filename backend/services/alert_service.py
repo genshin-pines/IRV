@@ -169,6 +169,13 @@ def make_alert_callback(engine):
             except Exception as e:
                 logger.error(f"WebSocket 广播失败: {e}")
 
+        # 3. 飞书通知（CRITICAL/WARNING → 群消息）
+        try:
+            from backend.services.notifier import send_alert_notification
+            await send_alert_notification(alert)
+        except Exception as e:
+            logger.error(f"飞书通知失败: {e}")
+
     def callback(alert: Dict):
         """同步回调 — Agent 线程安全调用"""
         if main_loop and main_loop.is_running():
