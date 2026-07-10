@@ -7,8 +7,9 @@ import hmac
 import json
 import os
 import secrets
+import uuid
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -20,6 +21,13 @@ from sqlalchemy.orm import Session
 from backend.config import (
     AUTH_CODE_TTL_SEC,
     AUTH_SECRET_KEY,
+    HUAWEI_SMS_APP_KEY,
+    HUAWEI_SMS_APP_SECRET,
+    HUAWEI_SMS_ENDPOINT,
+    HUAWEI_SMS_SENDER,
+    HUAWEI_SMS_SIGNATURE,
+    HUAWEI_SMS_STATUS_CALLBACK,
+    HUAWEI_SMS_TEMPLATE_ID,
     SMS_WEBHOOK_TOKEN,
     SMS_WEBHOOK_URL,
     WECHAT_APP_ID,
@@ -94,6 +102,61 @@ def _session(user: AuthUser) -> dict[str, Any]:
         "token": _token(user),
         "storage": "server-db: password/contact/openid hashed; browser session AES-GCM",
     }
+
+
+def _huawei_sms_ready() -> bool:
+    required = [
+        HUAWEI_SMS_ENDPOINT,
+        HUAWEI_SMS_APP_KEY,
+        HUAWEI_SMS_APP_SECRET,
+        HUAWEI_SMS_SENDER,
+        HUAWEI_SMS_TEMPLATE_ID,
+        HUAWEI_SMS_SIGNATURE,
+    ]
+    return all(i.strip() for i in required)
+
+
+def _huawei_wsse_header() -> dict[str, str]:
+    nonce = uuid.uuid4().hex
+    created = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    digest = hashlib.sha256((nonce + created + HUAWEI_SMS_APP_SECRET).encode("utf-8")).digest()
+    password_digest = base64.b64encode(digest).decode("ascii")
+    return {
+        "Authorization": 'WSSE realm="SDP",profile="UsernameToken",type="Appkey"',
+        "X-WSSE": (
+            f'UsernameToken Username="{HUAWEI_SMS_APP_KEY}",'
+            f'PasswordDigest="{password_digest}",Nonce="{nonce}",Created="{created}"'
+        ),
+    }
+
+
+def _send_huawei_sms(phone: str, code: str) -> None:
+    body = {
+        "from": HUAWEI_SMS_SENDER,
+        "to": phone,
+        "templateId": HUAWEI_SMS_TEMPLATE_ID,
+        "templateParas": json.dumps([code], ensure_ascii=False),
+        "signature": HUAWEI_SMS_SIGNATURE,
+    }
+    if HUAWEI_SMS_STATUS_CALLBACK:
+        body["statusCallback"] = HUAWEI_SMS_STATUS_CALLBACK
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        **_huawei_wsse_header(),
+    }
+    try:
+        response = requests.post(HUAWEI_SMS_ENDPOINT, data=urlencode(body), headers=headers, timeout=10)
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"华为云短信请求失败: {exc}") from exc
+    if response.status_code >= 400:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"华为云短信发送失败: {response.text[:300]}")
+    try:
+        data = response.json()
+    except ValueError:
+        return
+    result = data.get("result") or data.get("code") or ""
+    if result and str(result) not in {"0", "000000"}:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"华为云短信发送失败: {data}")
 
 
 def _find_or_create_contact_user(db: Session, contact: str, role: str) -> AuthUser:
@@ -173,7 +236,7 @@ def security_report():
             "password_storage": "PBKDF2-HMAC-SHA256 with per-user salt",
             "contact_storage": "HMAC-SHA256 digest, no plain phone/email stored",
             "browser_storage": "frontend session uses Web Crypto AES-GCM",
-            "sms_provider": "configured" if SMS_WEBHOOK_URL else "development mode",
+            "sms_provider": "huawei_cloud" if _huawei_sms_ready() else ("webhook" if SMS_WEBHOOK_URL else "development mode"),
             "wechat": "configured" if WECHAT_APP_ID and WECHAT_APP_SECRET else "development mode",
         }
     )
@@ -231,17 +294,23 @@ def sms_send(payload: SmsSendRequest, db: Session = Depends(get_db)):
     )
     db.add(auth_code)
     db.commit()
-    dev_mode = not SMS_WEBHOOK_URL
-    if SMS_WEBHOOK_URL:
+    dev_mode = not (_huawei_sms_ready() or SMS_WEBHOOK_URL)
+    provider = "development"
+    if _huawei_sms_ready():
+        _send_huawei_sms(phone, code)
+        provider = "huawei_cloud"
+    elif SMS_WEBHOOK_URL:
         headers = {"Authorization": f"Bearer {SMS_WEBHOOK_TOKEN}"} if SMS_WEBHOOK_TOKEN else {}
         try:
             requests.post(SMS_WEBHOOK_URL, json={"to": phone, "code": code, "scene": "IRV_LOGIN"}, headers=headers, timeout=8)
         except requests.RequestException as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"短信服务发送失败: {exc}") from exc
+        provider = "webhook"
     return _ok(
         {
             "sent": True,
             "dev_mode": dev_mode,
+            "provider": provider,
             "dev_code": code if dev_mode else None,
             "expires_in": AUTH_CODE_TTL_SEC,
         },
