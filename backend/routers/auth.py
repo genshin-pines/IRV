@@ -7,7 +7,9 @@ import hmac
 import json
 import os
 import secrets
+import smtplib
 import uuid
+from email.message import EmailMessage
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -21,6 +23,11 @@ from sqlalchemy.orm import Session
 from backend.config import (
     AUTH_CODE_TTL_SEC,
     AUTH_SECRET_KEY,
+    EMAIL_FROM,
+    EMAIL_SMTP_HOST,
+    EMAIL_SMTP_PASSWORD,
+    EMAIL_SMTP_PORT,
+    EMAIL_SMTP_USER,
     HUAWEI_SMS_APP_KEY,
     HUAWEI_SMS_APP_SECRET,
     HUAWEI_SMS_ENDPOINT,
@@ -159,6 +166,34 @@ def _send_huawei_sms(phone: str, code: str) -> None:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"华为云短信发送失败: {data}")
 
 
+def _email_ready() -> bool:
+    return all([EMAIL_SMTP_HOST.strip(), EMAIL_SMTP_USER.strip(), EMAIL_SMTP_PASSWORD.strip(), EMAIL_FROM.strip()])
+
+
+def _send_email_code(email: str, code: str) -> None:
+    if not _email_ready():
+        return
+    msg = EmailMessage()
+    msg["Subject"] = "IRV 登录验证码"
+    msg["From"] = EMAIL_FROM
+    msg["To"] = email
+    msg.set_content(f"您的 IRV 登录验证码是：{code}\n\n验证码 {AUTH_CODE_TTL_SEC // 60} 分钟内有效。若非本人操作，请忽略本邮件。")
+    try:
+        if EMAIL_SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, timeout=10) as smtp:
+                smtp.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, timeout=10) as smtp:
+                smtp.starttls()
+                smtp.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+                smtp.send_message(msg)
+    except smtplib.SMTPException as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"邮箱验证码发送失败: {exc}") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"邮箱服务器连接失败: {exc}") from exc
+
+
 def _find_or_create_contact_user(db: Session, contact: str, role: str) -> AuthUser:
     target_hash = _digest(_norm(contact))
     user = db.scalar(select(AuthUser).where(AuthUser.contact_hash == target_hash))
@@ -224,6 +259,17 @@ class SmsLoginRequest(BaseModel):
     role: str = "driver"
 
 
+class EmailSendRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=128)
+    role: str = "driver"
+
+
+class EmailLoginRequest(BaseModel):
+    email: str
+    code: str = Field(min_length=4, max_length=8)
+    role: str = "driver"
+
+
 class WechatQrRequest(BaseModel):
     role: str = "driver"
 
@@ -237,6 +283,7 @@ def security_report():
             "contact_storage": "HMAC-SHA256 digest, no plain phone/email stored",
             "browser_storage": "frontend session uses Web Crypto AES-GCM",
             "sms_provider": "huawei_cloud" if _huawei_sms_ready() else ("webhook" if SMS_WEBHOOK_URL else "development mode"),
+            "email_provider": "smtp" if _email_ready() else "development mode",
             "wechat": "configured" if WECHAT_APP_ID and WECHAT_APP_SECRET else "development mode",
         }
     )
@@ -334,6 +381,54 @@ def login_sms(payload: SmsLoginRequest, db: Session = Depends(get_db)):
     user = _find_or_create_contact_user(db, phone, auth_code.role or payload.role)
     db.commit()
     return _ok(_session(user), "验证码登录成功")
+
+
+@router.post("/email/send")
+def email_send(payload: EmailSendRequest, db: Session = Depends(get_db)):
+    email = _norm(payload.email)
+    if "@" not in email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
+    code = f"{secrets.randbelow(900000) + 100000}"
+    expires_at = datetime.utcnow() + timedelta(seconds=AUTH_CODE_TTL_SEC)
+    auth_code = AuthCode(
+        target_hash=_digest(email),
+        code_hash=_digest(f"{email}:{code}"),
+        role=_role(payload.role),
+        expires_at=expires_at,
+    )
+    db.add(auth_code)
+    db.commit()
+    dev_mode = not _email_ready()
+    if not dev_mode:
+        _send_email_code(email, code)
+    return _ok(
+        {
+            "sent": True,
+            "dev_mode": dev_mode,
+            "provider": "smtp" if not dev_mode else "development",
+            "dev_code": code if dev_mode else None,
+            "expires_in": AUTH_CODE_TTL_SEC,
+        },
+        "邮箱验证码已发送",
+    )
+
+
+@router.post("/login/email")
+def login_email(payload: EmailLoginRequest, db: Session = Depends(get_db)):
+    email = _norm(payload.email)
+    target_hash = _digest(email)
+    code_hash = _digest(f"{email}:{payload.code.strip()}")
+    auth_code = db.scalar(
+        select(AuthCode)
+        .where(AuthCode.target_hash == target_hash, AuthCode.code_hash == code_hash, AuthCode.used.is_(False))
+        .order_by(AuthCode.created_at.desc())
+    )
+    if not auth_code or auth_code.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="邮箱验证码无效或已过期")
+    auth_code.used = True
+    user = _find_or_create_contact_user(db, email, auth_code.role or payload.role)
+    db.commit()
+    return _ok(_session(user), "邮箱验证码登录成功")
 
 
 @router.post("/wechat/qrcode")
