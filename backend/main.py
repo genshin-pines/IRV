@@ -16,7 +16,7 @@ if str(PROJECT_DIR) not in sys.path:
 from alert_agent.scheduler import agent_status, start_scheduler, stop_scheduler
 from backend.database import init_db
 from backend.middleware.logging_mw import RequestLoggingMiddleware
-from backend.routers import alerts_router, cameras_router, gesture_router, plate_router, ws_manager
+from backend.routers import alerts_router, auth_router, cameras_router, gesture_router, plate_router, ws_manager
 from backend.services.log_service import setup_log_collector
 
 FRONTEND_DIR = PROJECT_DIR / "frontend"
@@ -49,6 +49,7 @@ app.add_middleware(
 )
 
 app.include_router(alerts_router)
+app.include_router(auth_router)
 app.include_router(plate_router)
 app.include_router(gesture_router)
 app.include_router(cameras_router)
@@ -74,6 +75,7 @@ def health():
         "modules": {
             "plate": "/api/plate/recognize-image",
             "gesture": "/api/gesture/status",
+            "auth": "/api/auth/security",
             "alerts": "/api/alerts",
             "cameras": "/api/cameras",
         },
