@@ -17,7 +17,6 @@ class AuthUser(Base):
     display_name: Mapped[str] = mapped_column(String(128), default="")
     role: Mapped[str] = mapped_column(String(32), default="driver")
     contact_hash: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True, index=True)
-    wechat_openid_hash: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -31,16 +30,4 @@ class AuthCode(Base):
     role: Mapped[str] = mapped_column(String(32), default="driver")
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     used: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
-class WechatLoginState(Base):
-    __tablename__ = "wechat_login_states"
-
-    state: Mapped[str] = mapped_column(String(80), primary_key=True)
-    role: Mapped[str] = mapped_column(String(32), default="driver")
-    status: Mapped[str] = mapped_column(String(32), default="pending")
-    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    qr_url: Mapped[str] = mapped_column(Text, default="")
-    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

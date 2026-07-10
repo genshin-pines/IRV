@@ -11,16 +11,16 @@ import smtplib
 import uuid
 from email.message import EmailMessage
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.config import (
+    AUTH_CODE_COOLDOWN_SEC,
     AUTH_CODE_TTL_SEC,
     AUTH_SECRET_KEY,
     EMAIL_FROM,
@@ -37,12 +37,9 @@ from backend.config import (
     HUAWEI_SMS_TEMPLATE_ID,
     SMS_WEBHOOK_TOKEN,
     SMS_WEBHOOK_URL,
-    WECHAT_APP_ID,
-    WECHAT_APP_SECRET,
-    WECHAT_REDIRECT_URI,
 )
 from backend.database import get_db
-from backend.models.auth_user import AuthCode, AuthUser, WechatLoginState
+from backend.models.auth_user import AuthCode, AuthUser
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -107,7 +104,7 @@ def _session(user: AuthUser) -> dict[str, Any]:
     return {
         "user": _user_payload(user),
         "token": _token(user),
-        "storage": "server-db: password/contact/openid hashed; browser session AES-GCM",
+        "storage": "server-db: password/contact hashed; browser session AES-GCM",
     }
 
 
@@ -211,21 +208,19 @@ def _find_or_create_contact_user(db: Session, contact: str, role: str) -> AuthUs
     return user
 
 
-def _find_or_create_wechat_user(db: Session, openid: str, role: str) -> AuthUser:
-    openid_hash = _digest(openid)
-    user = db.scalar(select(AuthUser).where(AuthUser.wechat_openid_hash == openid_hash))
-    if user:
-        return user
-    user = AuthUser(
-        username=f"wx_{openid_hash[:10]}",
-        display_name="微信用户",
-        role=_role(role),
-        wechat_openid_hash=openid_hash,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
+def _ensure_code_cooldown(db: Session, target_hash: str) -> None:
+    latest = db.scalar(select(AuthCode).where(AuthCode.target_hash == target_hash).order_by(AuthCode.created_at.desc()))
+    if not latest:
+        return
+    retry_at = latest.created_at + timedelta(seconds=AUTH_CODE_COOLDOWN_SEC)
+    now = datetime.utcnow()
+    if retry_at > now:
+        retry_after = max(1, int((retry_at - now).total_seconds()))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"验证码发送太频繁，请 {retry_after} 秒后再试",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 class RegisterRequest(BaseModel):
@@ -270,10 +265,6 @@ class EmailLoginRequest(BaseModel):
     role: str = "driver"
 
 
-class WechatQrRequest(BaseModel):
-    role: str = "driver"
-
-
 @router.get("/security")
 def security_report():
     return _ok(
@@ -284,7 +275,7 @@ def security_report():
             "browser_storage": "frontend session uses Web Crypto AES-GCM",
             "sms_provider": "huawei_cloud" if _huawei_sms_ready() else ("webhook" if SMS_WEBHOOK_URL else "development mode"),
             "email_provider": "smtp" if _email_ready() else "development mode",
-            "wechat": "configured" if WECHAT_APP_ID and WECHAT_APP_SECRET else "development mode",
+            "code_cooldown_seconds": AUTH_CODE_COOLDOWN_SEC,
         }
     )
 
@@ -331,10 +322,12 @@ def login_password(payload: PasswordLoginRequest, db: Session = Depends(get_db))
 @router.post("/sms/send")
 def sms_send(payload: SmsSendRequest, db: Session = Depends(get_db)):
     phone = _norm(payload.phone)
+    target_hash = _digest(phone)
+    _ensure_code_cooldown(db, target_hash)
     code = f"{secrets.randbelow(900000) + 100000}"
     expires_at = datetime.utcnow() + timedelta(seconds=AUTH_CODE_TTL_SEC)
     auth_code = AuthCode(
-        target_hash=_digest(phone),
+        target_hash=target_hash,
         code_hash=_digest(f"{phone}:{code}"),
         role=_role(payload.role),
         expires_at=expires_at,
@@ -388,10 +381,12 @@ def email_send(payload: EmailSendRequest, db: Session = Depends(get_db)):
     email = _norm(payload.email)
     if "@" not in email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
+    target_hash = _digest(email)
+    _ensure_code_cooldown(db, target_hash)
     code = f"{secrets.randbelow(900000) + 100000}"
     expires_at = datetime.utcnow() + timedelta(seconds=AUTH_CODE_TTL_SEC)
     auth_code = AuthCode(
-        target_hash=_digest(email),
+        target_hash=target_hash,
         code_hash=_digest(f"{email}:{code}"),
         role=_role(payload.role),
         expires_at=expires_at,
@@ -429,76 +424,3 @@ def login_email(payload: EmailLoginRequest, db: Session = Depends(get_db)):
     user = _find_or_create_contact_user(db, email, auth_code.role or payload.role)
     db.commit()
     return _ok(_session(user), "邮箱验证码登录成功")
-
-
-@router.post("/wechat/qrcode")
-def wechat_qrcode(payload: WechatQrRequest, db: Session = Depends(get_db)):
-    state = secrets.token_urlsafe(24)
-    expires_at = datetime.utcnow() + timedelta(minutes=10)
-    if WECHAT_APP_ID:
-        redirect_uri = quote(WECHAT_REDIRECT_URI, safe="")
-        qr_url = (
-            "https://open.weixin.qq.com/connect/qrconnect"
-            f"?appid={WECHAT_APP_ID}&redirect_uri={redirect_uri}&response_type=code"
-            f"&scope=snsapi_login&state={state}#wechat_redirect"
-        )
-        dev_mode = False
-    else:
-        qr_url = f"irv-wechat-login://scan?state={state}"
-        dev_mode = True
-    item = WechatLoginState(state=state, role=_role(payload.role), qr_url=qr_url, expires_at=expires_at)
-    db.add(item)
-    db.commit()
-    return _ok({"state": state, "qr_url": qr_url, "dev_mode": dev_mode, "expires_in": 600})
-
-
-@router.get("/wechat/status/{state}")
-def wechat_status(state: str, db: Session = Depends(get_db)):
-    item = db.get(WechatLoginState, state)
-    if not item or item.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="二维码已失效")
-    data: dict[str, Any] = {"state": state, "status": item.status}
-    if item.status == "confirmed" and item.user_id:
-        user = db.get(AuthUser, item.user_id)
-        if user:
-            data.update(_session(user))
-    return _ok(data)
-
-
-@router.post("/wechat/dev-confirm/{state}")
-def wechat_dev_confirm(state: str, db: Session = Depends(get_db)):
-    item = db.get(WechatLoginState, state)
-    if not item or item.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="二维码已失效")
-    if WECHAT_APP_ID and WECHAT_APP_SECRET:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="已配置真实微信，不允许开发确认")
-    user = _find_or_create_wechat_user(db, f"dev-openid-{state}", item.role)
-    item.status = "confirmed"
-    item.user_id = user.id
-    db.commit()
-    return _ok(_session(user), "开发模式扫码确认成功")
-
-
-@router.get("/wechat/callback", response_class=HTMLResponse)
-def wechat_callback(code: str = Query(...), state: str = Query(...), db: Session = Depends(get_db)):
-    item = db.get(WechatLoginState, state)
-    if not item or item.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="二维码已失效")
-    if not WECHAT_APP_ID or not WECHAT_APP_SECRET:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="微信密钥未配置")
-    url = (
-        "https://api.weixin.qq.com/sns/oauth2/access_token"
-        f"?appid={WECHAT_APP_ID}&secret={WECHAT_APP_SECRET}&code={code}&grant_type=authorization_code"
-    )
-    try:
-        result = requests.get(url, timeout=8).json()
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"微信接口调用失败: {exc}") from exc
-    openid = result.get("openid")
-    if not openid:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=result.get("errmsg", "微信授权失败"))
-    user = _find_or_create_wechat_user(db, openid, item.role)
-    item.status = "confirmed"
-    item.user_id = user.id
-    db.commit()
-    return HTMLResponse("<h2>微信授权成功</h2><p>请回到 IRV 页面完成登录。</p>")
