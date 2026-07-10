@@ -2,6 +2,7 @@
 
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,13 @@ _manager = None
 _engine = None
 _last_frame_message: dict[str, Any] | None = None
 _last_action_message: dict[str, Any] | None = None
+_gesture_control_enabled = False
+_last_control_toggle_at = 0.0
+_last_turn_action = ""
+_last_turn_action_at = 0.0
+CONTROL_TOGGLE_SUPPRESS_SEC = 1.5
+TURN_ACTION_SUPPRESS_SEC = 1.0
+TURN_REVERSE_SUPPRESS_SEC = 1.5
 
 
 def ensure_vendor_path() -> None:
@@ -127,18 +135,69 @@ def recognize_frame_bytes(contents: bytes, filename: str = "frame") -> dict[str,
 
 
 def map_event_to_vehicle(event: dict[str, Any]) -> dict[str, Any]:
+    global _gesture_control_enabled, _last_control_toggle_at, _last_turn_action, _last_turn_action_at
+
     gesture_type = str(event.get("gesture_type") or event.get("gesture_action") or "").upper()
     mapping = {
         "SWIPE_LEFT": ("turn", "left", "左转"),
         "SWIPE_RIGHT": ("turn", "right", "右转"),
-        "SWIPE_UP": ("window", "up", "关闭车窗"),
-        "SWIPE_DOWN": ("window", "down", "打开车窗"),
+        "SWIPE_UP": ("media", "volume_up", "音量增加"),
+        "SWIPE_DOWN": ("media", "volume_down", "音量降低"),
         "FIST": ("system", "confirm", "确认"),
         "OPEN_PALM": ("system", "home", "主页/唤醒"),
         "CIRCLE": ("media", "volume", "调节音量"),
-        "THUMB_UP_DOWN": ("phone", "toggle", "接听/挂断"),
+        "TAP": ("media", "music_toggle", "播放/暂停"),
+        "CLICK": ("media", "music_toggle", "播放/暂停"),
+        "DOUBLE_TAP": ("media", "music_toggle", "播放/暂停"),
+        "DOUBLE_CLICK": ("media", "music_toggle", "播放/暂停"),
+        "LIKE": ("vehicle", "lights_on", "开启灯光"),
+        "DISLIKE": ("vehicle", "lights_off", "关闭灯光"),
+        "CALL": ("phone", "phone_answer", "接听电话"),
+        "STOP": ("phone", "phone_hangup", "挂断电话"),
+        "STOP_INVERTED": ("phone", "phone_hangup", "挂断电话"),
+        "THUMB_UP_DOWN": ("phone", "phone_answer", "接听电话"),
+        "DNDV": ("system", "control_toggle", "手势控制开关"),
+        "DNDV1": ("system", "control_toggle", "手势控制开关"),
+        "CONTROL_TOGGLE": ("system", "control_toggle", "手势控制开关"),
         "ZOOM_IN": ("vehicle", "accelerate", "加速"),
         "ZOOM_OUT": ("vehicle", "decelerate", "减速"),
     }
     target, action, label = mapping.get(gesture_type, ("unknown", "unknown", "未映射"))
-    return {"target": target, "action": action, "label": label}
+
+    action_applied = True
+    suppress_reason = ""
+    if action == "control_toggle":
+        now = time.time()
+        elapsed = now - _last_control_toggle_at
+        if elapsed < CONTROL_TOGGLE_SUPPRESS_SEC:
+            action_applied = False
+            suppress_reason = f"ignore repeated control toggle within {CONTROL_TOGGLE_SUPPRESS_SEC:.1f}s"
+        else:
+            _last_control_toggle_at = now
+            _gesture_control_enabled = not _gesture_control_enabled
+            suppress_reason = f"gesture control {'enabled' if _gesture_control_enabled else 'disabled'}"
+    elif action not in {"phone_answer", "phone_hangup"} and not _gesture_control_enabled:
+        action_applied = False
+        suppress_reason = "gesture control disabled"
+    elif action in {"left", "right"}:
+        now = time.time()
+        elapsed = now - _last_turn_action_at
+        is_reverse = _last_turn_action in {"left", "right"} and _last_turn_action != action
+        if is_reverse and elapsed < TURN_REVERSE_SUPPRESS_SEC:
+            action_applied = False
+            suppress_reason = f"ignore reverse turn action within {TURN_REVERSE_SUPPRESS_SEC:.1f}s"
+        elif _last_turn_action == action and elapsed < TURN_ACTION_SUPPRESS_SEC:
+            action_applied = False
+            suppress_reason = f"ignore repeated turn action within {TURN_ACTION_SUPPRESS_SEC:.1f}s"
+        else:
+            _last_turn_action = action
+            _last_turn_action_at = now
+
+    return {
+        "target": target,
+        "action": action,
+        "label": label,
+        "action_applied": action_applied,
+        "suppress_reason": suppress_reason,
+        "gesture_control_enabled": _gesture_control_enabled,
+    }

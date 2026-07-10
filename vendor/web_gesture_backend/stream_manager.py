@@ -76,7 +76,8 @@ class StreamManager:
         print(f"[StreamManager] Resolution: {width}x{height}")
         print(f"[StreamManager] ffmpeg: {FFMPEG_BIN}")
 
-        self.engine = GestureEngine()
+        trace_path = Path(__file__).resolve().parents[2] / "logs" / "gesture_static_trace.log"
+        self.engine = GestureEngine(trace_path=trace_path, reset_trace=True)
         self.engine.on_frame = lambda d: self.out_queue.put(("frame", d))
         self.engine.on_action = lambda d: self.out_queue.put(("action", d))
 

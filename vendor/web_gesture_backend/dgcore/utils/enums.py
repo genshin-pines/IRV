@@ -67,6 +67,7 @@ class Event(Enum):
     DRAG3 = 21
     DROP3 = 22
     TAP = 23
+    DNDV1 = 24
 
 
 targets = [
