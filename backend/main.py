@@ -23,7 +23,7 @@ from alert_agent.scheduler import agent_status, start_scheduler, stop_scheduler
 from backend.config import EVENT_BUS_WINDOW_SECONDS, FUSION_DEDUP_MS, FUSION_LLM_ENABLED
 from backend.database import init_db
 from backend.middleware.logging_mw import RequestLoggingMiddleware
-from backend.routers import alerts_router, auth_router, cameras_router, gesture_router, plate_router, traffic_police_router, ws_manager
+from backend.routers import alerts_router, auth_router, cameras_router, gesture_router, music_router, plate_router, preferences_router, traffic_police_router, ws_manager
 from backend.services.log_service import setup_log_collector
 
 FRONTEND_DIR = PROJECT_DIR / "frontend"
@@ -91,6 +91,8 @@ async def not_found_handler(request: Request, exc):
 
 # 注册路由
 app.include_router(alerts_router)
+app.include_router(music_router)
+app.include_router(preferences_router)
 app.include_router(auth_router)
 app.include_router(plate_router)
 app.include_router(gesture_router)
