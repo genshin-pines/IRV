@@ -86,11 +86,29 @@ async def api_traffic_police_frame(file: UploadFile = File(...)):
 
 
 @router.post("/events")
-def api_gesture_event(event: GestureEvent):
+async def api_gesture_event(event: GestureEvent):
     command = event.command or map_event_to_vehicle(event.model_dump())
     write_log("gesture", "INFO", f"gesture event source={event.source} type={event.gesture_type} confidence={event.confidence} stable={event.stable} command={command}")
     if event.confidence < 0.75:
         write_log("gesture", "WARNING", f"gesture confidence low source={event.source} type={event.gesture_type} confidence={event.confidence}")
+
+    # 推送车主手势到融合引擎（三路感知 EventBus）
+    try:
+        from backend.services.alert_service import get_event_bus
+        from fusion.perception_event import PerceptionEvent, Module
+
+        bus = get_event_bus()
+        if bus is not None:
+            pe = PerceptionEvent.from_gesture(
+                gesture_type=event.gesture_type,
+                gesture_name=event.gesture_label or event.gesture_type,
+                confidence=event.confidence,
+                module=Module.DRIVER_GESTURE,
+            )
+            await bus.publish(pe)
+    except Exception:
+        pass
+
     return response({**event.model_dump(), "command": command})
 
 

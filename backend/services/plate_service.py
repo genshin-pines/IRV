@@ -11,6 +11,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from backend.services.log_service import write_log
+
 logger = logging.getLogger("plate")
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -53,8 +55,11 @@ def get_catcher():
 
 
 def normalize_plate(raw: Any) -> dict[str, Any]:
+    import math
+
     plate_code = raw[0]
-    confidence = round(float(raw[1]), 4)
+    raw_conf = float(raw[1])
+    confidence = round(raw_conf, 4) if not (math.isnan(raw_conf) or math.isinf(raw_conf)) else 0.0
     plate_type = int(raw[2])
     bbox = [int(v) for v in raw[3]]
     return {
@@ -119,6 +124,8 @@ def recognize_video_file(path: str, filename: str = "video", interval: float = 0
                 for raw in catcher(frame):
                     plate = normalize_plate(raw)
                     plate["time_sec"] = timestamp
+                    level = "WARNING" if plate["confidence"] < 0.99 else "INFO"  # TODO-TEST: revert to 0.75
+                    getattr(logger, level.lower())("plate confidence=%s code=%s", plate["confidence"], plate["plate_code"])
                     code = plate["plate_code"]
                     if code not in plate_best or plate["confidence"] > plate_best[code]["confidence"]:
                         plate_best[code] = plate
@@ -161,6 +168,7 @@ def recognize_stream(rtsp_url: str, duration_sec: float = 8, sample_interval: fl
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not cap.isOpened():
         logger.error("camera stream disconnected: %s", rtsp_url)
+        write_log("camera", "ERROR", f"RTSP disconnected Camera timeout url={rtsp_url}")
         raise ValueError("无法打开 RTSP 视频流")
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 25
@@ -182,6 +190,8 @@ def recognize_stream(rtsp_url: str, duration_sec: float = 8, sample_interval: fl
                 for raw in catcher(frame):
                     plate = normalize_plate(raw)
                     plate["time_sec"] = timestamp
+                    level = "WARNING" if plate["confidence"] < 0.99 else "INFO"  # TODO-TEST: revert to 0.75
+                    getattr(logger, level.lower())("plate confidence=%s code=%s", plate["confidence"], plate["plate_code"])
                     code = plate["plate_code"]
                     if code not in plate_best or plate["confidence"] > plate_best[code]["confidence"]:
                         plate_best[code] = plate

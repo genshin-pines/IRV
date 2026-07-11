@@ -43,7 +43,7 @@ PRESET_PROVIDERS: Dict[str, LLMConfig] = {
     "deepseek": LLMConfig(
         base_url="https://api.deepseek.com/v1",
         api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
-        model="deepseek-chat",
+        model="deepseek-v4-flash",
         temperature=0.3,
         max_tokens=4096,
     ),

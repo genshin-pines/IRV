@@ -87,7 +87,7 @@ def api_video_feed():
 
 
 @router.post("/driver-assist/analyze")
-def api_driver_assist_analyze(payload: DriverAssistAnalyzeRequest):
+async def api_driver_assist_analyze(payload: DriverAssistAnalyzeRequest):
     camera = get_camera(payload.camera_id)
     if camera is None:
         raise HTTPException(status_code=404, detail="camera not found")
@@ -112,6 +112,25 @@ def api_driver_assist_analyze(payload: DriverAssistAnalyzeRequest):
 
     message = f"driver assist scene={scene} camera={camera['id']} name={camera['name']} advice={advice}"
     write_log("camera" if level in {"ERROR", "CRITICAL"} else "system", level, message)
+
+    # 推送交警手势场景到融合引擎（三路感知 EventBus）
+    try:
+        from backend.services.alert_service import get_event_bus
+        from fusion.perception_event import PerceptionEvent, Module
+
+        bus = get_event_bus()
+        if bus is not None:
+            pe = PerceptionEvent.from_gesture(
+                gesture_type=payload.scene,
+                gesture_name=title,
+                confidence=0.85,
+                module=Module.TRAFFIC_GESTURE,
+                camera_id=payload.camera_id,
+            )
+            await bus.publish(pe)
+    except Exception:
+        pass
+
     return response(
         {
             "camera": camera,

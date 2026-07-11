@@ -21,11 +21,41 @@
 
 from __future__ import annotations
 
+import json
+import math
 import uuid
 from datetime import datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
+from starlette.responses import JSONResponse
+
+
+# ── NaN/Infinity 安全 JSON 响应 ───────────────────────
+
+def _sanitize_float(obj: Any) -> Any:
+    """递归替换 NaN / Infinity 为 None，确保 JSON 可序列化"""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_float(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_float(v) for v in obj]
+    return obj
+
+
+class SanitizedJSONResponse(JSONResponse):
+    """自动清理 NaN / Infinity 的 JSONResponse"""
+
+    def render(self, content: Any) -> bytes:
+        return json.dumps(
+            _sanitize_float(content),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
 
 
 class APIResponse(BaseModel):

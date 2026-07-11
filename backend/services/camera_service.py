@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 
 CAMERAS = [
-    {"id": "live1", "name": "桥面", "rtsp_url": "rtsp://10.126.59.120:8554/live/live1"},
+    {"id": "live1", "name": "桥面", "rtsp_url": "rtsp://10.126.59.120:18554/live/live1"},  # TODO-TEST: revert to :8554
     {"id": "live2", "name": "停车场出口", "rtsp_url": "rtsp://10.126.59.120:8554/live/live2"},
     {"id": "live3", "name": "行人检测", "rtsp_url": "rtsp://10.126.59.120:8554/live/live3"},
     {"id": "live4", "name": "消防车识别", "rtsp_url": "rtsp://10.126.59.120:8554/live/live4"},

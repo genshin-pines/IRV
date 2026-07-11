@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
@@ -17,12 +22,24 @@ from backend.schemas.alerts import (
     LogRead,
     SimulateRequest,
 )
-from backend.services.alert_service import acknowledge_alert, delete_alert, get_alert, get_alert_stats, list_alerts
+from backend.schemas.common import ok, fail
+from backend.services.alert_service import (
+    acknowledge_alert,
+    delete_alert,
+    get_alert,
+    get_alert_stats,
+    list_alerts,
+)
 from backend.services.log_service import get_log_stats, query_logs, write_log
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["alerts"])
 
+
+# ═══════════════════════════════════════════════════════════
+# WebSocket 管理器
+# ═══════════════════════════════════════════════════════════
 
 class WebSocketManager:
     def __init__(self) -> None:
@@ -52,6 +69,10 @@ ws_manager = WebSocketManager()
 def response(data=None, message: str = "success", ok: bool = True) -> dict:
     return {"ok": ok, "data": data, "message": message, "trace_id": datetime.now().strftime("%Y%m%d-") + uuid4().hex[:8]}
 
+
+# ═══════════════════════════════════════════════════════════
+# 告警 CRUD 路由
+# ═══════════════════════════════════════════════════════════
 
 @router.get("/api/alerts", response_model=ApiResponse[AlertList])
 def api_list_alerts(
@@ -95,6 +116,10 @@ def api_delete_alert(alert_id: int, db: Session = Depends(get_db)):
     return response({"deleted": True})
 
 
+# ═══════════════════════════════════════════════════════════
+# 日志路由
+# ═══════════════════════════════════════════════════════════
+
 @router.get("/api/logs", response_model=ApiResponse[LogList])
 def api_list_logs(
     page: int = Query(1, ge=1),
@@ -113,6 +138,24 @@ def api_list_logs(
 def api_log_stats():
     return response(get_log_stats())
 
+
+# ═══════════════════════════════════════════════════════════
+# 飞书通知测试
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/api/notify/test")
+async def api_test_notification(msg: str = "🧪 IRV 告警系统 — 飞书通知连通性测试"):
+    from backend.services.notifier import send_test_message
+    success = await send_test_message(msg)
+    if success:
+        return ok(message="测试消息已发送到飞书群")
+    else:
+        raise HTTPException(status_code=500, detail="飞书通知发送失败，请检查配置和日志")
+
+
+# ═══════════════════════════════════════════════════════════
+# 模拟异常日志（开发测试用）
+# ═══════════════════════════════════════════════════════════
 
 @router.post("/api/logs/simulate", response_model=ApiResponse[dict])
 def api_simulate_logs(payload: SimulateRequest):
@@ -146,6 +189,10 @@ def api_simulate_logs(payload: SimulateRequest):
     return response({"scenario": payload.scenario, "count": written})
 
 
+# ═══════════════════════════════════════════════════════════
+# WebSocket 实时告警
+# ═══════════════════════════════════════════════════════════
+
 @router.websocket("/ws/alerts")
 async def websocket_alerts(websocket: WebSocket):
     await ws_manager.connect(websocket)
@@ -156,3 +203,225 @@ async def websocket_alerts(websocket: WebSocket):
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
+
+
+# ═══════════════════════════════════════════════════════════
+# 感知事件接入（识别模块 → 事件总线）
+# ═══════════════════════════════════════════════════════════
+
+class PerceptionEventInput(BaseModel):
+    module: str  # "plate_recognition" | "traffic_gesture" | "driver_gesture"
+    event_type: str = ""
+    data: dict = {}
+    confidence: float = 0.0
+    camera_id: str = ""
+    frame_timestamp: Optional[float] = None
+
+
+@router.post("/api/perception/event")
+async def ingest_perception_event(body: PerceptionEventInput):
+    from backend.services.alert_service import get_event_bus
+    from fusion.perception_event import PerceptionEvent, Module, EventType
+
+    bus = get_event_bus()
+    if bus is None:
+        raise HTTPException(status_code=503, detail="EventBus 未初始化")
+
+    try:
+        module_enum = Module(body.module)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"未知模块: {body.module}")
+
+    if body.event_type:
+        try:
+            event_type_enum = EventType(body.event_type)
+        except ValueError:
+            event_type_enum = {
+                Module.PLATE_RECOGNITION: EventType.PLATE_DETECTED,
+                Module.TRAFFIC_GESTURE: EventType.TRAFFIC_GESTURE,
+                Module.DRIVER_GESTURE: EventType.DRIVER_GESTURE,
+            }.get(module_enum, EventType.PLATE_DETECTED)
+    else:
+        event_type_enum = {
+            Module.PLATE_RECOGNITION: EventType.PLATE_DETECTED,
+            Module.TRAFFIC_GESTURE: EventType.TRAFFIC_GESTURE,
+            Module.DRIVER_GESTURE: EventType.DRIVER_GESTURE,
+        }.get(module_enum, EventType.PLATE_DETECTED)
+
+    event = PerceptionEvent(
+        event_id=f"{body.module}_{int(time.time() * 1000)}",
+        timestamp=datetime.now(timezone.utc),
+        module=module_enum,
+        event_type=event_type_enum,
+        data=body.data,
+        confidence=body.confidence,
+        camera_id=body.camera_id,
+        frame_timestamp=body.frame_timestamp or time.perf_counter(),
+    )
+    await bus.publish(event)
+    return ok(data={"event_id": event.event_id})
+
+
+# ═══════════════════════════════════════════════════════════
+# 融合推理查询
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/api/fusion/status")
+async def fusion_status():
+    from backend.services.alert_service import get_fusion_agent, get_event_bus
+
+    fusion = get_fusion_agent()
+    bus = get_event_bus()
+
+    result = {
+        "fusion_agent": fusion.status if fusion else None,
+        "event_bus": bus.stats if bus else None,
+    }
+    if bus:
+        try:
+            context = await bus.get_context()
+            result["context"] = {
+                "plate": _simplify_context(context.get("plate", {})),
+                "traffic_gesture": _simplify_context(context.get("traffic_gesture", {})),
+                "driver_gesture": _simplify_context(context.get("driver_gesture", {})),
+                "window_size": context.get("window_size", 0),
+            }
+        except Exception:
+            result["context"] = None
+    return ok(data=result)
+
+
+@router.get("/api/latency/stats")
+async def latency_stats():
+    from backend.services.alert_service import get_fusion_agent
+
+    fusion = get_fusion_agent()
+    if fusion is None:
+        raise HTTPException(status_code=503, detail="FusionAgent 未初始化")
+    return ok(data=fusion.latency_stats)
+
+
+# ═══════════════════════════════════════════════════════════
+# 模拟感知事件（开发测试用）
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/api/perception/simulate")
+async def simulate_perception_events(
+    scenario: str = Query("stop_with_vehicle", description="场景: stop_with_vehicle|slow_down|turn_left|multi_vehicle|normal|traffic_priority"),
+):
+    from backend.services.alert_service import get_event_bus
+    from fusion.perception_event import PerceptionEvent, Module, EventType
+
+    bus = get_event_bus()
+    if bus is None:
+        raise HTTPException(status_code=503, detail="EventBus 未初始化")
+
+    SCENARIOS = {
+        "stop_with_vehicle": [
+            {"module": "traffic_gesture", "event_type": "traffic_gesture",
+             "data": {"gesture": "停止", "gesture_type": "stop", "confidence": 0.92},
+             "confidence": 0.92, "camera_id": "live2"},
+            {"module": "plate_recognition", "event_type": "plate_detected",
+             "data": {"plate_code": "京A12345", "plate_color": "蓝牌", "confidence": 0.95,
+                       "bbox": [100, 200, 300, 350]},
+             "confidence": 0.95, "camera_id": "live1"},
+            {"module": "plate_recognition", "event_type": "plate_detected",
+             "data": {"plate_code": "沪B67890", "plate_color": "绿牌", "confidence": 0.88,
+                       "bbox": [400, 150, 600, 300]},
+             "confidence": 0.88, "camera_id": "live1"},
+        ],
+        "slow_down": [
+            {"module": "traffic_gesture", "event_type": "traffic_gesture",
+             "data": {"gesture": "减速慢行", "gesture_type": "slow_down", "confidence": 0.90},
+             "confidence": 0.90, "camera_id": "live2"},
+            {"module": "plate_recognition", "event_type": "plate_detected",
+             "data": {"plate_code": "粤C11111", "plate_color": "蓝牌", "confidence": 0.93,
+                       "bbox": [200, 180, 400, 340]},
+             "confidence": 0.93, "camera_id": "live1"},
+        ],
+        "turn_left": [
+            {"module": "traffic_gesture", "event_type": "traffic_gesture",
+             "data": {"gesture": "左转弯", "gesture_type": "turn_left", "confidence": 0.87},
+             "confidence": 0.87, "camera_id": "live2"},
+            {"module": "plate_recognition", "event_type": "plate_detected",
+             "data": {"plate_code": "川A88888", "plate_color": "蓝牌", "confidence": 0.91,
+                       "bbox": [50, 200, 250, 350]},
+             "confidence": 0.91, "camera_id": "live1"},
+        ],
+        "multi_vehicle": [
+            {"module": "plate_recognition", "event_type": "plate_detected",
+             "data": {"plate_code": "京A11111", "plate_color": "蓝牌", "confidence": 0.95,
+                       "bbox": [100, 200, 300, 350]},
+             "confidence": 0.95, "camera_id": "live1"},
+            {"module": "plate_recognition", "event_type": "plate_detected",
+             "data": {"plate_code": "沪B22222", "plate_color": "绿牌", "confidence": 0.89,
+                       "bbox": [400, 150, 600, 300]},
+             "confidence": 0.89, "camera_id": "live1"},
+            {"module": "plate_recognition", "event_type": "plate_detected",
+             "data": {"plate_code": "粤C33333", "plate_color": "蓝牌", "confidence": 0.92,
+                       "bbox": [700, 100, 900, 250]},
+             "confidence": 0.92, "camera_id": "live1"},
+        ],
+        "normal": [
+            {"module": "plate_recognition", "event_type": "plate_detected",
+             "data": {"plate_code": "京A12345", "plate_color": "蓝牌", "confidence": 0.96,
+                       "bbox": [300, 200, 500, 350]},
+             "confidence": 0.96, "camera_id": "live1"},
+        ],
+        "traffic_priority": [
+            {"module": "traffic_gesture", "event_type": "traffic_gesture",
+             "data": {"gesture": "停止", "gesture_type": "stop", "confidence": 0.91},
+             "confidence": 0.91, "camera_id": "live2"},
+            {"module": "driver_gesture", "event_type": "driver_gesture",
+             "data": {"gesture": "挥手", "gesture_type": "wave", "confidence": 0.85},
+             "confidence": 0.85, "camera_id": "live3"},
+        ],
+    }
+
+    if scenario not in SCENARIOS:
+        raise HTTPException(status_code=400, detail=f"未知场景: {scenario}")
+
+    events_data = SCENARIOS[scenario]
+    published_ids = []
+
+    for evt in events_data:
+        try:
+            module_enum = Module(evt["module"])
+        except ValueError:
+            continue
+        try:
+            event_type_enum = EventType(evt["event_type"])
+        except ValueError:
+            event_type_enum = EventType.PLATE_DETECTED
+
+        event = PerceptionEvent(
+            event_id=f"sim_{scenario}_{len(published_ids)}_{int(time.time()*1000)}",
+            timestamp=datetime.now(timezone.utc),
+            module=module_enum,
+            event_type=event_type_enum,
+            data=evt["data"],
+            confidence=evt["confidence"],
+            camera_id=evt.get("camera_id", ""),
+            frame_timestamp=time.perf_counter(),
+        )
+        await bus.publish(event)
+        published_ids.append(event.event_id)
+
+    return ok(
+        data={"scenario": scenario, "published": len(published_ids), "event_ids": published_ids},
+        message="融合引擎将自动处理这些事件，查看 GET /api/fusion/status 获取结果",
+    )
+
+
+def _simplify_context(ctx: dict) -> dict:
+    latest = ctx.get("latest")
+    return {
+        "has_data": latest is not None,
+        "latest_summary": (
+            f"{latest.gesture_name or latest.plate_code}" if latest else None
+        ),
+        "latest_confidence": latest.confidence if latest else None,
+        "count_2s": ctx.get("count_2s", 0),
+        "avg_confidence": ctx.get("avg_confidence", 0),
+        "stable_1s": ctx.get("stable_1s", False),
+    }

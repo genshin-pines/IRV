@@ -6,7 +6,7 @@ from typing import Sequence
 import requests
 
 from alert_agent.prompt import SUMMARY_PROMPT, SYSTEM_PROMPT
-from backend.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, LLM_MODEL, LLM_TIMEOUT_SEC
+from backend.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_TIMEOUT_SEC
 
 
 logger = logging.getLogger("alert_agent")
@@ -14,8 +14,8 @@ logger = logging.getLogger("alert_agent")
 
 class LLMService:
     def __init__(self) -> None:
-        self.api_key = DEEPSEEK_API_KEY
-        self.base_url = DEEPSEEK_BASE_URL.rstrip("/")
+        self.api_key = LLM_API_KEY
+        self.base_url = LLM_BASE_URL.rstrip("/")
         self.model = LLM_MODEL
 
     def summarize(self, logs: Sequence[str], fallback: str) -> str:

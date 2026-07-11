@@ -76,18 +76,99 @@ python -m venv .venv
 
 ## 配置
 
-复制 `.env.example` 为 `.env` 后按需修改：
+配置文件加载顺序：项目根 `.env` → `backend/.env`（后者覆盖前者）。推荐将敏感信息放在 `backend/.env`。
+
+复制 `.env.example` 为项目根 `.env`（或 `backend/.env`）后按需修改。
+
+### 基础
 
 ```text
-APP_ENV=dev
-DATABASE_URL=sqlite:///./irv.db
-LOG_LEVEL=INFO
-DEEPSEEK_API_KEY=
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
+DATABASE_URL=sqlite:///./irv.db   # 数据库路径，默认项目根 irv.db
+LOG_LEVEL=INFO                     # 日志级别: DEBUG | INFO | WARNING | ERROR
 ```
 
-数据库默认使用项目根目录下的 `irv.db`。日志默认写入 `logs/`。
+### Agent
+
+```text
+AGENT_POLL_INTERVAL_SEC=3         # Agent 轮询兜底间隔（秒），事件驱动即时触发不受此影响
+LOG_COLLECTOR_CAPACITY=2000       # 内存日志环形缓冲区容量
+```
+
+### LLM（告警摘要 & 融合推理）
+
+支持任何 OpenAI 兼容接口。通用变量 `LLM_API_KEY` / `LLM_BASE_URL` 优先，同时兼容旧版 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL`。
+
+```text
+LLM_API_KEY=                       # API Key（通用，优先）
+LLM_BASE_URL=                      # Base URL（通用，优先），不填则回退到 DeepSeek 默认值
+LLM_MODEL=deepseek-chat            # 模型名
+LLM_TIMEOUT_SEC=15                 # 请求超时（秒）
+```
+
+常用 Provider 参考：
+
+| Provider | LLM_BASE_URL | LLM_MODEL |
+|---|---|---|
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| Kimi | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
+| GPT-4o | `https://api.openai.com/v1` | `gpt-4o` |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4` |
+| Ollama 本地 | `http://localhost:11434/v1` | `llama3` |
+
+LLM 不可用时所有路径均有规则引擎 fallback，不影响基础功能。
+
+### 融合推理
+
+```text
+EVENT_BUS_WINDOW_SECONDS=2.0       # 事件滑动窗口（秒）
+FUSION_DEDUP_MS=500                # 融合防抖（毫秒），避免 LLM 过载
+FUSION_LLM_ENABLED=true            # 是否启用 LLM 融合推理，false 时纯规则引擎
+```
+
+### 飞书告警通知
+
+支持两种方式，只需配置一种。
+
+**方式一：自定义机器人 Webhook**（最简单）
+```text
+FEISHU_NOTIFY_ENABLED=true
+FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+```
+
+**方式二：应用机器人**（支持 `@all`、卡片消息）
+```text
+FEISHU_NOTIFY_ENABLED=true
+FEISHU_APP_ID=cli_xxx              # 飞书开放平台 → 应用凭证
+FEISHU_APP_SECRET=xxx              # 应用 Secret
+FEISHU_CHAT_ID=oc_xxx              # 目标群 ID，从群设置 URL 获取
+```
+
+### 认证
+
+```text
+AUTH_SECRET_KEY=irv-local-demo-secret   # JWT 签名密钥，生产环境请更换
+AUTH_CODE_TTL_SEC=300                   # 验证码有效期（秒）
+AUTH_CODE_COOLDOWN_SEC=60               # 验证码发送冷却（秒）
+```
+
+### 短信 / 邮箱验证码（可选）
+
+```text
+SMS_WEBHOOK_URL=
+SMS_WEBHOOK_TOKEN=
+EMAIL_SMTP_HOST=
+EMAIL_SMTP_PORT=465
+EMAIL_SMTP_USER=
+EMAIL_SMTP_PASSWORD=
+EMAIL_FROM=
+```
+
+### 交警手势识别
+
+```text
+CTPGR_REFERENCE_DIR=               # CTPGR 模型参考库路径
+```
 
 ## 主要 API
 

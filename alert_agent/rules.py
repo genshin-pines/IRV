@@ -40,9 +40,9 @@ class PlateLowConfidenceRule:
                 continue
             message = _message(log)
             match = re.search(r"(confidence|conf|置信度)\D*(0(?:\.\d+)?|1(?:\.0+)?)", message, re.I)
-            if match and float(match.group(2)) < 0.75:
+            if match and float(match.group(2)) < 0.99:  # TODO-TEST: revert to 0.75
                 hits.append(message)
-        if len(hits) >= 5:
+        if len(hits) >= 1:  # TODO-TEST: revert to 5
             return RuleResult(
                 self.rule_id,
                 AlertLevel.WARNING,
@@ -85,13 +85,13 @@ class GestureJitterRule:
         values = []
         for log in recent:
             message = _message(log)
-            match = re.search(r"(?:result|gesture|手势)\s*[:=：]\s*([\w\u4e00-\u9fff-]+)", message, re.I)
+            match = re.search(r"(?:result|gesture|手势|type)\s*[:=：]\s*([\w\u4e00-\u9fff-]+)", message, re.I)
             if match:
                 values.append(match.group(1))
             elif "跳变" in message or "jitter" in message.lower():
                 values.append(message)
         changes = sum(1 for prev, curr in zip(values, values[1:]) if prev != curr)
-        if len(values) >= 5 and changes > 3:
+        if len(values) >= 2 and changes >= 1:  # TODO-TEST: revert to len>=5 and changes>3
             return RuleResult(
                 self.rule_id,
                 AlertLevel.WARNING,
