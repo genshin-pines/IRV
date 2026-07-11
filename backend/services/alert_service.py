@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════
-# 告警 CRUD（REST API 用）
+# 告警 CRUD
 # ═══════════════════════════════════════════════════════════
 
 def create_alert(db: Session, payload: AlertCreate) -> AlertEvent:
@@ -134,75 +134,6 @@ def cleanup_old_alerts(db: Session, days: int = 30) -> int:
 
 
 # ═══════════════════════════════════════════════════════════
-# Agent 告警回调（Agent 线程 → DB + WebSocket + 通知）
-# ═══════════════════════════════════════════════════════════
-
-def make_alert_callback(ws_broadcast=None):
-    """
-    创建告警回调：写入数据库 + WebSocket 广播 + 飞书通知。
-
-    每条 Agent 产生的告警都会经过这里。
-    注意：Agent 在 asyncio task 中运行，回调是同步函数。
-    """
-    from backend.database import SessionLocal
-
-    def callback(alert: dict):
-        """同步回调 — 写入 DB + 触发异步推送"""
-        # 1. 写入数据库
-        try:
-            with SessionLocal() as session:
-                affected = alert.get("affected_modules", [])
-                record = AlertEvent(
-                    level=alert.get("level", "info"),
-                    title=alert.get("title", ""),
-                    summary=alert.get("summary", ""),
-                    detail=alert.get("detail", ""),
-                    source_module=affected[0] if affected else "system",
-                    affected_modules=",".join(affected),
-                    ai_generated=alert.get("ai_generated", False),
-                    fingerprint=alert.get("_fingerprint", ""),
-                    webhook_markdown=alert.get("webhook_markdown", ""),
-                    ttl_minutes=alert.get("ttl_minutes", 60),
-                    status=AlertStatus.UNREAD.value,
-                )
-                session.add(record)
-                session.commit()
-        except Exception as e:
-            logger.error(f"告警落库失败: {e}")
-
-        # 2. WebSocket 广播
-        if ws_broadcast:
-            try:
-                ws_msg = alert.get("websocket") or {
-                    "type": "alert",
-                    "level": alert.get("level"),
-                    "title": alert.get("title"),
-                    "message": alert.get("summary"),
-                }
-                # 在事件循环中调度异步 broadcast
-                try:
-                    loop = asyncio.get_running_loop()
-                    asyncio.run_coroutine_threadsafe(ws_broadcast(ws_msg), loop)
-                except RuntimeError:
-                    asyncio.run(ws_broadcast(ws_msg))
-            except Exception as e:
-                logger.error(f"WebSocket 广播失败: {e}")
-
-        # 3. 飞书通知（CRITICAL/WARNING → 群消息）
-        try:
-            from backend.services.notifier import send_alert_notification
-            try:
-                loop = asyncio.get_running_loop()
-                asyncio.run_coroutine_threadsafe(send_alert_notification(alert), loop)
-            except RuntimeError:
-                asyncio.run(send_alert_notification(alert))
-        except Exception as e:
-            logger.error(f"飞书通知失败: {e}")
-
-    return callback
-
-
-# ═══════════════════════════════════════════════════════════
 # 融合引擎生命周期管理
 # ═══════════════════════════════════════════════════════════
 
@@ -217,20 +148,14 @@ async def setup_fusion_engine(
     window_seconds: float = 2.0,
     dedup_ms: int = 500,
 ):
-    """
-    初始化 FusionAgent + EventBus。
-    在 FastAPI startup 事件中调用。
-    """
     global _event_bus, _fusion_agent
 
     from backend.config import LLM_API_KEY
     from fusion import AsyncEventBus, FusionAgent
 
-    # 创建事件总线
     _event_bus = AsyncEventBus(window_seconds=window_seconds)
     logger.info(f"EventBus 已创建: window={window_seconds}s")
 
-    # 创建 LLM 客户端
     llm_client = None
     if use_llm and LLM_API_KEY:
         try:
@@ -240,16 +165,12 @@ async def setup_fusion_engine(
         except Exception as e:
             logger.warning(f"Fusion LLM 客户端创建失败，降级为纯规则模式: {e}")
 
-    # 创建融合结果回调（WebSocket 推送）
     async def on_fusion_result(result):
-        """融合结果回调：WebSocket 推送驾驶建议"""
         if ws_broadcast:
             try:
                 await ws_broadcast(result.to_websocket())
             except Exception as e:
                 logger.error(f"融合结果 WebSocket 推送失败: {e}")
-
-        # 如果有融合告警，也推送
         alert = result.to_alert()
         if alert and ws_broadcast:
             try:
@@ -257,7 +178,6 @@ async def setup_fusion_engine(
             except Exception as e:
                 logger.error(f"融合告警 WebSocket 推送失败: {e}")
 
-    # 创建 FusionAgent
     _fusion_agent = FusionAgent(
         event_bus=_event_bus,
         llm_client=llm_client,
@@ -273,7 +193,6 @@ async def setup_fusion_engine(
 
 
 async def stop_fusion_engine():
-    """停止融合引擎（FastAPI shutdown 事件）"""
     global _fusion_agent, _event_bus
     if _fusion_agent:
         await _fusion_agent.stop()
@@ -282,10 +201,8 @@ async def stop_fusion_engine():
 
 
 def get_event_bus():
-    """获取事件总线实例（供 API router 使用）"""
     return _event_bus
 
 
 def get_fusion_agent():
-    """获取融合引擎实例（供 API router 使用）"""
     return _fusion_agent

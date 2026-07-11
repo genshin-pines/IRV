@@ -24,7 +24,7 @@ from backend.schemas.alerts import (
 )
 from backend.schemas.common import ok, fail
 from backend.services.alert_service import (
-    acknowledge_alert as ack_alert_svc,
+    acknowledge_alert,
     delete_alert,
     get_alert,
     get_alert_stats,
@@ -33,6 +33,8 @@ from backend.services.alert_service import (
 from backend.services.log_service import get_log_stats, query_logs, write_log
 
 logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["alerts"])
 
 
 # ═══════════════════════════════════════════════════════════
@@ -64,21 +66,15 @@ class WebSocketManager:
 ws_manager = WebSocketManager()
 
 
-# ── 工具函数 ────────────────────────────────────────────
-
-def _err(message: str, status_code: int = 400, **kwargs) -> JSONResponse:
-    """返回带 HTTP 状态码的统一错误响应"""
-    return JSONResponse(status_code=status_code, content=fail(message, **kwargs))
-
-
-router = APIRouter(tags=["alerts"])
+def response(data=None, message: str = "success", ok: bool = True) -> dict:
+    return {"ok": ok, "data": data, "message": message, "trace_id": datetime.now().strftime("%Y%m%d-") + uuid4().hex[:8]}
 
 
 # ═══════════════════════════════════════════════════════════
 # 告警 CRUD 路由
 # ═══════════════════════════════════════════════════════════
 
-@router.get("/api/alerts")
+@router.get("/api/alerts", response_model=ApiResponse[AlertList])
 def api_list_alerts(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -87,56 +83,44 @@ def api_list_alerts(
     source_module: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    items, total = list_alerts(
-        db, page=page, page_size=page_size,
-        level=level, status=status_filter, source_module=source_module,
-    )
-    data = AlertList(
-        items=[AlertRead.model_validate(item) for item in items],
-        total=total, page=page, page_size=page_size,
-    )
-    return ok(data=data.model_dump())
+    items, total = list_alerts(db, page=page, page_size=page_size, level=level, status=status_filter, source_module=source_module)
+    data = AlertList(items=[AlertRead.model_validate(item) for item in items], total=total, page=page, page_size=page_size)
+    return response(data)
 
 
-@router.get("/api/alerts/stats")
+@router.get("/api/alerts/stats", response_model=ApiResponse[AlertStats])
 def api_alert_stats(db: Session = Depends(get_db)):
-    return ok(data=get_alert_stats(db))
+    return response(get_alert_stats(db))
 
 
-@router.get("/api/alerts/{alert_id}")
+@router.get("/api/alerts/{alert_id}", response_model=ApiResponse[AlertRead])
 def api_get_alert(alert_id: int, db: Session = Depends(get_db)):
-    if alert_id <= 0:
-        return _err(f"告警 ID 无效: {alert_id}", 400)
     alert = get_alert(db, alert_id)
     if alert is None:
-        return _err(f"告警 {alert_id} 不存在", 404)
-    return ok(data=AlertRead.model_validate(alert).model_dump())
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="alert not found")
+    return response(AlertRead.model_validate(alert))
 
 
-@router.post("/api/alerts/{alert_id}/acknowledge")
+@router.post("/api/alerts/{alert_id}/acknowledge", response_model=ApiResponse[AlertRead])
 def api_ack_alert(alert_id: int, payload: AlertAckRequest, db: Session = Depends(get_db)):
-    if alert_id <= 0:
-        return _err(f"告警 ID 无效: {alert_id}", 400)
-    alert = ack_alert_svc(db, alert_id, payload.ack_user)
+    alert = acknowledge_alert(db, alert_id, payload.ack_user)
     if alert is None:
-        return _err(f"告警 {alert_id} 不存在", 404)
-    return ok(data=AlertRead.model_validate(alert).model_dump(), message="告警已确认")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="alert not found")
+    return response(AlertRead.model_validate(alert))
 
 
-@router.delete("/api/alerts/{alert_id}")
+@router.delete("/api/alerts/{alert_id}", response_model=ApiResponse[dict])
 def api_delete_alert(alert_id: int, db: Session = Depends(get_db)):
-    if alert_id <= 0:
-        return _err(f"告警 ID 无效: {alert_id}", 400)
     if not delete_alert(db, alert_id):
-        return _err(f"告警 {alert_id} 不存在", 404)
-    return ok(data={"deleted": True})
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="alert not found")
+    return response({"deleted": True})
 
 
 # ═══════════════════════════════════════════════════════════
 # 日志路由
 # ═══════════════════════════════════════════════════════════
 
-@router.get("/api/logs")
+@router.get("/api/logs", response_model=ApiResponse[LogList])
 def api_list_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
@@ -145,21 +129,14 @@ def api_list_logs(
     start_time: datetime | None = Query(None),
     end_time: datetime | None = Query(None),
 ):
-    items, total = query_logs(
-        page=page, page_size=page_size,
-        module=module, level=level,
-        start_time=start_time, end_time=end_time,
-    )
-    data = LogList(
-        items=[LogRead(**item) for item in items],
-        total=total, page=page, page_size=page_size,
-    )
-    return ok(data=data.model_dump())
+    items, total = query_logs(page=page, page_size=page_size, module=module, level=level, start_time=start_time, end_time=end_time)
+    data = LogList(items=[LogRead(**item) for item in items], total=total, page=page, page_size=page_size)
+    return response(data)
 
 
-@router.get("/api/logs/stats")
+@router.get("/api/logs/stats", response_model=ApiResponse[dict])
 def api_log_stats():
-    return ok(data=get_log_stats())
+    return response(get_log_stats())
 
 
 # ═══════════════════════════════════════════════════════════
@@ -173,14 +150,14 @@ async def api_test_notification(msg: str = "🧪 IRV 告警系统 — 飞书通�
     if success:
         return ok(message="测试消息已发送到飞书群")
     else:
-        return _err("飞书通知发送失败，请检查配置和日志", 500)
+        raise HTTPException(status_code=500, detail="飞书通知发送失败，请检查配置和日志")
 
 
 # ═══════════════════════════════════════════════════════════
 # 模拟异常日志（开发测试用）
 # ═══════════════════════════════════════════════════════════
 
-@router.post("/api/logs/simulate")
+@router.post("/api/logs/simulate", response_model=ApiResponse[dict])
 def api_simulate_logs(payload: SimulateRequest):
     scenarios = {
         "plate_low_conf": [("plate", "WARNING", "plate confidence=0.62 low")],
@@ -195,13 +172,6 @@ def api_simulate_logs(payload: SimulateRequest):
         "api_timeout": [("backend", "ERROR", "LLM request timeout elapsed=9s")],
         "login_fail": [("login", "WARNING", "login fail user=admin ip=192.168.1.50")],
     }
-
-    VALID_SCENARIOS = {"error_spike", "plate_low_conf", "camera_disconnect",
-                        "api_timeout", "gesture_jitter", "login_fail", "mixed"}
-
-    if payload.scenario not in VALID_SCENARIOS:
-        return _err(f"未知场景: {payload.scenario}，可选: {', '.join(sorted(VALID_SCENARIOS))}", 400)
-
     if payload.scenario == "mixed":
         entries = []
         for key in ("plate_low_conf", "camera_disconnect", "api_timeout", "login_fail"):
@@ -209,18 +179,14 @@ def api_simulate_logs(payload: SimulateRequest):
     else:
         entries = scenarios.get(payload.scenario)
         if entries is None:
-            return _err(f"未知场景: {payload.scenario}", 400)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unknown scenario")
 
     written = 0
     for index in range(payload.count):
         source, level, message = entries[index % len(entries)]
         write_log(source, level, message)
         written += 1
-
-    return ok(
-        data={"scenario": payload.scenario, "injected": written},
-        message="等待巡检周期结束后查看 GET /api/alerts",
-    )
+    return response({"scenario": payload.scenario, "count": written})
 
 
 # ═══════════════════════════════════════════════════════════
@@ -237,16 +203,13 @@ async def websocket_alerts(websocket: WebSocket):
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
-        logger.info(f"WebSocket 客户端已断开 (剩余 {len(ws_manager.clients)} 个)")
 
 
 # ═══════════════════════════════════════════════════════════
 # 感知事件接入（识别模块 → 事件总线）
 # ═══════════════════════════════════════════════════════════
 
-
 class PerceptionEventInput(BaseModel):
-    """识别模块推送的感知事件"""
     module: str  # "plate_recognition" | "traffic_gesture" | "driver_gesture"
     event_type: str = ""
     data: dict = {}
@@ -257,21 +220,18 @@ class PerceptionEventInput(BaseModel):
 
 @router.post("/api/perception/event")
 async def ingest_perception_event(body: PerceptionEventInput):
-    """接收来自识别模块的感知事件，发布到事件总线。"""
     from backend.services.alert_service import get_event_bus
     from fusion.perception_event import PerceptionEvent, Module, EventType
 
     bus = get_event_bus()
     if bus is None:
-        return _err("EventBus 未初始化", 503)
+        raise HTTPException(status_code=503, detail="EventBus 未初始化")
 
-    # 确定模块
     try:
         module_enum = Module(body.module)
     except ValueError:
-        return _err(f"未知模块: {body.module}，可选: plate_recognition/traffic_gesture/driver_gesture", 400)
+        raise HTTPException(status_code=400, detail=f"未知模块: {body.module}")
 
-    # 确定事件类型
     if body.event_type:
         try:
             event_type_enum = EventType(body.event_type)
@@ -288,7 +248,6 @@ async def ingest_perception_event(body: PerceptionEventInput):
             Module.DRIVER_GESTURE: EventType.DRIVER_GESTURE,
         }.get(module_enum, EventType.PLATE_DETECTED)
 
-    # 创建并发布事件
     event = PerceptionEvent(
         event_id=f"{body.module}_{int(time.time() * 1000)}",
         timestamp=datetime.now(timezone.utc),
@@ -299,7 +258,6 @@ async def ingest_perception_event(body: PerceptionEventInput):
         camera_id=body.camera_id,
         frame_timestamp=body.frame_timestamp or time.perf_counter(),
     )
-
     await bus.publish(event)
     return ok(data={"event_id": event.event_id})
 
@@ -310,7 +268,6 @@ async def ingest_perception_event(body: PerceptionEventInput):
 
 @router.get("/api/fusion/status")
 async def fusion_status():
-    """获取融合引擎状态和最新驾驶建议"""
     from backend.services.alert_service import get_fusion_agent, get_event_bus
 
     fusion = get_fusion_agent()
@@ -320,8 +277,6 @@ async def fusion_status():
         "fusion_agent": fusion.status if fusion else None,
         "event_bus": bus.stats if bus else None,
     }
-
-    # 附加上下文快照
     if bus:
         try:
             context = await bus.get_context()
@@ -333,18 +288,16 @@ async def fusion_status():
             }
         except Exception:
             result["context"] = None
-
     return ok(data=result)
 
 
 @router.get("/api/latency/stats")
 async def latency_stats():
-    """获取全链路延迟统计"""
     from backend.services.alert_service import get_fusion_agent
 
     fusion = get_fusion_agent()
     if fusion is None:
-        return _err("FusionAgent 未初始化", 503)
+        raise HTTPException(status_code=503, detail="FusionAgent 未初始化")
     return ok(data=fusion.latency_stats)
 
 
@@ -356,13 +309,12 @@ async def latency_stats():
 async def simulate_perception_events(
     scenario: str = Query("stop_with_vehicle", description="场景: stop_with_vehicle|slow_down|turn_left|multi_vehicle|normal|traffic_priority"),
 ):
-    """模拟三路感知事件，用于测试融合推理引擎。"""
     from backend.services.alert_service import get_event_bus
     from fusion.perception_event import PerceptionEvent, Module, EventType
 
     bus = get_event_bus()
     if bus is None:
-        return _err("EventBus 未初始化", 503)
+        raise HTTPException(status_code=503, detail="EventBus 未初始化")
 
     SCENARIOS = {
         "stop_with_vehicle": [
@@ -426,9 +378,8 @@ async def simulate_perception_events(
         ],
     }
 
-    PERCEPTION_SCENARIOS = set(SCENARIOS.keys())
-    if scenario not in PERCEPTION_SCENARIOS:
-        return _err(f"未知场景: {scenario}，可选: {', '.join(sorted(PERCEPTION_SCENARIOS))}", 400)
+    if scenario not in SCENARIOS:
+        raise HTTPException(status_code=400, detail=f"未知场景: {scenario}")
 
     events_data = SCENARIOS[scenario]
     published_ids = []
@@ -463,7 +414,6 @@ async def simulate_perception_events(
 
 
 def _simplify_context(ctx: dict) -> dict:
-    """简化上下文用于 API 返回（去掉完整事件对象，只保留摘要）"""
     latest = ctx.get("latest")
     return {
         "has_data": latest is not None,

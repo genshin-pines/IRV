@@ -6,7 +6,9 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = BASE_DIR.parent
-load_dotenv(BASE_DIR / ".env")
+# 优先加载 backend/.env，不存在则回退到项目根 .env
+load_dotenv(PROJECT_DIR / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{PROJECT_DIR / 'irv.db'}")
 LOG_DIR = PROJECT_DIR / "logs"
@@ -17,32 +19,44 @@ AGENT_POLL_INTERVAL_SEC = int(os.getenv("AGENT_POLL_INTERVAL_SEC", "3"))
 LOG_COLLECTOR_CAPACITY = int(os.getenv("LOG_COLLECTOR_CAPACITY", "2000"))
 
 # ── LLM 通用配置（支持任何 OpenAI 兼容接口） ──────────
-# 只需设置 LLM_API_KEY + LLM_BASE_URL + LLM_MODEL
-# 示例:
-#   DeepSeek:  LLM_BASE_URL=https://api.deepseek.com/v1          LLM_MODEL=deepseek-chat
-#   Kimi:      LLM_BASE_URL=https://api.moonshot.cn/v1           LLM_MODEL=moonshot-v1-8k
-#   GPT-4o:    LLM_BASE_URL=https://api.openai.com/v1            LLM_MODEL=gpt-4o
-#   Qwen:      LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1  LLM_MODEL=qwen-plus
-#   GLM:       LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4 LLM_MODEL=glm-4
-#   Ollama:    LLM_BASE_URL=http://localhost:11434/v1            LLM_MODEL=llama3
-#   vLLM:      LLM_BASE_URL=http://localhost:8000/v1             LLM_MODEL=your-model
+# 通用变量（LLM_API_KEY / LLM_BASE_URL）优先，兼容旧版 DEEPSEEK_* 变量
 LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("DEEPSEEK_API_KEY", ""))
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"))
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
 LLM_TIMEOUT_SEC = float(os.getenv("LLM_TIMEOUT_SEC", "15"))
+# 保留旧版兼容
+DEEPSEEK_API_KEY = LLM_API_KEY
+DEEPSEEK_BASE_URL = LLM_BASE_URL
 
 # ── 融合推理 ──────────────────────────────────────────
 EVENT_BUS_WINDOW_SECONDS = float(os.getenv("EVENT_BUS_WINDOW_SECONDS", "2.0"))
 FUSION_DEDUP_MS = int(os.getenv("FUSION_DEDUP_MS", "500"))
 FUSION_LLM_ENABLED = os.getenv("FUSION_LLM_ENABLED", "true").lower() == "true"
 
-# ── 告警通知 ────────────────────────────────────────
-# @owner 成员E
-# 方式一：自定义机器人 Webhook（最简单，只需 URL）
+# ── 认证 ──────────────────────────────────────────────
+AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "irv-local-demo-secret")
+AUTH_CODE_TTL_SEC = int(os.getenv("AUTH_CODE_TTL_SEC", "300"))
+AUTH_CODE_COOLDOWN_SEC = int(os.getenv("AUTH_CODE_COOLDOWN_SEC", "60"))
+
+# ── 短信 / 邮箱验证码 ─────────────────────────────────
+SMS_WEBHOOK_URL = os.getenv("SMS_WEBHOOK_URL", "")
+SMS_WEBHOOK_TOKEN = os.getenv("SMS_WEBHOOK_TOKEN", "")
+
+EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "")
+EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "465"))
+EMAIL_SMTP_USER = os.getenv("EMAIL_SMTP_USER", "")
+EMAIL_SMTP_PASSWORD = os.getenv("EMAIL_SMTP_PASSWORD", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM", EMAIL_SMTP_USER)
+
+# ── 飞书通知 ──────────────────────────────────────────
+FEISHU_NOTIFY_ENABLED = os.getenv("FEISHU_NOTIFY_ENABLED", "false").lower() == "true"
 FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
-DINGTALK_WEBHOOK_URL = os.getenv("DINGTALK_WEBHOOK_URL", "")
-# 方式二：应用机器人 API（支持 @all、卡片消息等高级功能）
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
 FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
-FEISHU_CHAT_ID = os.getenv("FEISHU_CHAT_ID", "")  # 目标群 ID
-FEISHU_NOTIFY_ENABLED = os.getenv("FEISHU_NOTIFY_ENABLED", "false").lower() == "true"
+FEISHU_CHAT_ID = os.getenv("FEISHU_CHAT_ID", "")
+
+# ── 交警手势识别 ──────────────────────────────────────
+CTPGR_REFERENCE_DIR = os.getenv(
+    "CTPGR_REFERENCE_DIR",
+    str(PROJECT_DIR.parent / "参考库" / "ctpgr-publish"),
+)

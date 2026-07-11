@@ -1,46 +1,12 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
-*.egg
-
-# 虚拟环境
-venv/
-.venv/
-env/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# 系统
-.DS_Store
-Thumbs.db
-
-# 输出
-*.annotated.jpg
-screenshot_*.jpg
-*.mp4
-*.avi
-test_images/*.jpg
-test_images/*.png
-
-# ONNX 模型缓存（首次运行自动下载，体积大）
-*.onnx
-
-# Jupyter
-.ipynb_checkpoints/
-
-# 敏感文件
-.env
+﻿.env
 *.db
-
-#ai
-.claude/
-
-#不需要
-*.md
+__pycache__/
+*.pyc
+.venv/
+venv/
+uploads/*
+!uploads/.gitkeep
+logs/*
+!logs/.gitkeep
+.pytest_cache/
+.coverage

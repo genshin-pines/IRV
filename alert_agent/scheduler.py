@@ -17,20 +17,18 @@ _agent: AlertAgent | None = None
 _event_loop: asyncio.AbstractEventLoop | None = None
 
 
-async def _poll_loop(agent: AlertAgent) -> None:
-    """兜底轮询：处理事件驱动遗漏的日志 + 定期清理过期告警"""
+async def _loop(agent: AlertAgent) -> None:
     while True:
         try:
             with SessionLocal() as db:
                 await agent.run_once(db)
                 cleanup_old_alerts(db)
         except Exception:
-            logger.exception("alert agent poll failed")
+            logger.exception("alert agent loop failed")
         await asyncio.sleep(AGENT_POLL_INTERVAL_SEC)
 
 
 def _on_log_emitted() -> None:
-    """日志写入回调 — 跨线程安全调度到事件循环"""
     if _agent is not None and _event_loop is not None and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(_agent.trigger(), _event_loop)
 
@@ -39,17 +37,11 @@ def start_scheduler(broadcast: Broadcast | None = None) -> None:
     global _task, _agent, _event_loop
     if _task and not _task.done():
         return
-
     _agent = AlertAgent(broadcast=broadcast)
     _event_loop = asyncio.get_running_loop()
-
-    # 兜底轮询（低频，处理漏网之鱼 + 数据清理）
-    _task = asyncio.create_task(_poll_loop(_agent), name="alert-agent-poll")
-
-    # 核心：事件驱动 — 日志写入立即触发
     get_collector().on_emit = _on_log_emitted
-
-    logger.info("alert agent started (event-driven + poll fallback every %ss)", AGENT_POLL_INTERVAL_SEC)
+    _task = asyncio.create_task(_loop(_agent), name="alert-agent-scheduler")
+    logger.info("alert agent scheduler started with event trigger")
 
 
 async def stop_scheduler() -> None:
