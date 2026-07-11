@@ -6,7 +6,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import re
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from backend.config import LOG_FILE, LOG_LEVEL, LOG_COLLECTOR_CAPACITY
 
@@ -22,6 +22,7 @@ class MemoryLogHandler(logging.Handler):
         self._seq = 0
         self._last_read_seq = 0
         self._lock = threading.Lock()
+        self.on_emit: Callable[[], None] | None = None
 
     def emit(self, record: logging.LogRecord) -> None:
         with self._lock:
@@ -35,6 +36,12 @@ class MemoryLogHandler(logging.Handler):
                 "raw": self.format(record),
             }
             self._items.append(entry)
+        callback = self.on_emit
+        if callback is not None:
+            try:
+                callback()
+            except Exception:
+                pass
 
     def query(
         self,

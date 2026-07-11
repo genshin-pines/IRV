@@ -17,6 +17,7 @@ class Base(DeclarativeBase):
 
 def init_db() -> None:
     from backend.models.alert_event import AlertEvent  # noqa: F401
+    from backend.models.auth_user import AuthCode, AuthUser  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _ensure_alert_columns_for_sqlite()

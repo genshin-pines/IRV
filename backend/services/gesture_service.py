@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import logging
+import importlib.util
 import sys
 import time
 from pathlib import Path
@@ -29,6 +30,21 @@ TURN_REVERSE_SUPPRESS_SEC = 1.5
 def ensure_vendor_path() -> None:
     if str(GESTURE_VENDOR) not in sys.path:
         sys.path.insert(0, str(GESTURE_VENDOR))
+    _ensure_vendor_models_module()
+
+
+def _ensure_vendor_models_module() -> None:
+    vendor_models = GESTURE_VENDOR / "models.py"
+    current = sys.modules.get("models")
+    if getattr(current, "__file__", None) == str(vendor_models):
+        return
+    sys.modules.pop("models", None)
+    spec = importlib.util.spec_from_file_location("models", vendor_models)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载手势模型定义: {vendor_models}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["models"] = module
+    spec.loader.exec_module(module)
 
 
 def get_stream_manager_class():

@@ -12,6 +12,14 @@ IRV 是一个面向沙盘/车载交互演示的多模块视觉系统，整合了
 - 视频反馈 HUD：只有业务动作真正生效时才在视频画面上显示提示，避免识别层误动作造成“看起来成功”的假反馈。
 - 日志追踪：手势帧、动态动作、业务映射和抑制原因写入 `logs/gesture_static_trace.log`，便于复盘。
 
+## 当前 main 开发集成
+
+- 登录与本地会话：接入 `/api/auth`，支持演示账号、注册、短信/邮箱验证码开发模式；密码使用 PBKDF2 加盐哈希，联系方式只存 HMAC 摘要，前端优先用 AES-GCM 保存会话。
+- 车外行车记录仪：车主端新增车外摄像头播放口，和“模拟车辆控制”同一行对齐；车内手势控车继续和音乐播放区域同一行对齐。
+- Agent 事件驱动：日志写入后立即触发 Agent 分析，同时保留轮询兜底；新增车外驾驶辅助风险规则。
+- 交警手势识别：接入 `ctpgr-publish` 的懒加载服务包装，只有调用 `/api/traffic-police/start` 或单帧识别时才尝试加载 PyTorch 模型。
+- 车外辅助分析：`/api/traffic-police/driver-assist/analyze` 可模拟正常、交警指挥、摄像头异常、近距离风险等场景，并写入日志触发 Agent。
+
 ## 项目结构
 
 ```text
@@ -97,6 +105,12 @@ LLM_MODEL=deepseek-chat
 | 手势消息 | `GET /api/gesture/messages` | 拉取帧消息与动作消息 |
 | 手势视频 | `GET /api/gesture/video-feed` | 查看带识别框和 HUD 的视频 |
 | 模拟手势 | `POST /api/gesture/events` | 前端快捷按钮使用的模拟入口 |
+| 认证安全 | `GET /api/auth/security` | 查看登录与存储安全策略 |
+| 密码登录 | `POST /api/auth/login/password` | 演示账号或注册账号登录 |
+| 注册账号 | `POST /api/auth/register` | 创建管理者/车主账号 |
+| 交警手势状态 | `GET /api/traffic-police/status` | 查看 CTPGR 模型可用性 |
+| 交警手势流 | `POST /api/traffic-police/start` | 启动车外交通警察手势识别流 |
+| 车外辅助分析 | `POST /api/traffic-police/driver-assist/analyze` | 写入驾驶辅助日志并触发 Agent |
 | 告警列表 | `GET /api/alerts` | 查看 Agent 告警 |
 | 模拟告警 | `POST /api/logs/simulate` | 生成测试日志与告警 |
 | 告警 WS | `WS /ws/alerts` | 告警实时推送 |
