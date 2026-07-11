@@ -24,10 +24,15 @@ Thumbs.db
 # 输出
 *.annotated.jpg
 screenshot_*.jpg
+*.zip
 *.mp4
 *.avi
+*.pt
+*.crt
+*.key
 test_images/*.jpg
 test_images/*.png
+bench_yolo.py
 
 # 外部工具二进制
 tools/

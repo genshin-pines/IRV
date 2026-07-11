@@ -4,25 +4,172 @@ HyperLPR3 车牌识别 FastAPI 服务
 访问: http://localhost:8003/     (上传页面: 图片 + 视频)
       http://localhost:8003/docs  (Swagger 交互式文档)
 """
+import asyncio
+import base64
+import json
 import os
+import queue
+import threading
 import time
 import tempfile
 import cv2
 import numpy as np
+from pathlib import Path
 from gpu_patch import catcher  # GPU 加速版 HyperLPR3
-from vehicle_lpr import get_vehicle_model, recognize_with_vehicle_crops
-from video_plate_tracker import VehiclePlateTracker
-from fastapi import FastAPI, File, UploadFile, Query
+from plate_track_store import PlateTrackStore
+from vehicle_lpr import (
+    VEHICLE_CLASS_IDS,
+    expand_box,
+    get_vehicle_model,
+    map_plate_bbox_from_crop,
+    recognize_with_vehicle_crops,
+)
+from live_server import StreamManager as LiveStreamManager
+from fastapi import FastAPI, File, UploadFile, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
 app = FastAPI(title="车牌识别服务 (GPU)", version="2.0")
+BASE_DIR = Path(__file__).resolve().parent
+LOCAL_VIDEO_DIR = BASE_DIR / "test_video"
+LOCAL_VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+TRACKER_CONFIG = "bytetrack.yaml"
 
 PLATE_COLOR_MAP = {
     -1: "未知", 0: "蓝牌", 1: "黄牌(单层)", 2: "白牌(单层)",
     3: "绿牌(新能源)", 4: "黑牌(港澳)", 5: "香港(单层)",
     6: "香港(双层)", 7: "澳门(单层)", 8: "澳门(双层)", 9: "黄牌(双层)",
 }
+
+
+def list_local_videos():
+    if not LOCAL_VIDEO_DIR.exists():
+        return []
+    return [
+        {
+            "name": path.name,
+            "size_mb": round(path.stat().st_size / 1024 / 1024, 1),
+        }
+        for path in sorted(LOCAL_VIDEO_DIR.iterdir())
+        if path.is_file() and path.suffix.lower() in LOCAL_VIDEO_EXTS
+    ]
+
+
+def resolve_local_video(name: str) -> Path | None:
+    candidate = (LOCAL_VIDEO_DIR / Path(name).name).resolve()
+    try:
+        candidate.relative_to(LOCAL_VIDEO_DIR.resolve())
+    except ValueError:
+        return None
+    if not candidate.exists() or candidate.suffix.lower() not in LOCAL_VIDEO_EXTS:
+        return None
+    return candidate
+
+
+def recognize_video_path(video_path: str, *, filename: str, interval: float):
+    """Offline video debug pipeline: YOLO ByteTrack -> HyperLPR -> per-track voting."""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps if fps > 0 else 0
+    cap.release()
+
+    frame_step = max(1, int(fps * interval)) if fps > 0 else 1
+    model = get_vehicle_model()
+    store = PlateTrackStore(min_confidence=0.90)
+
+    processed = 0
+    tracked_frames = 0
+    vehicle_regions = 0
+    rejected_count = 0
+    started = time.perf_counter()
+
+    stream = model.track(
+        source=video_path,
+        stream=True,
+        tracker=TRACKER_CONFIG,
+        classes=VEHICLE_CLASS_IDS,
+        conf=0.25,
+        imgsz=640,
+        verbose=False,
+    )
+
+    for frame_idx, result in enumerate(stream):
+        frame = result.orig_img
+        if frame is None or result.boxes is None or result.boxes.id is None:
+            continue
+
+        timestamp = round(frame_idx / fps, 2) if fps > 0 else 0
+        boxes = result.boxes
+        ids = boxes.id.cpu().numpy().astype(int)
+        xyxy = boxes.xyxy.cpu().numpy()
+        confs = boxes.conf.cpu().numpy()
+        tracked_frames += 1
+        should_ocr = frame_idx % frame_step == 0
+        if should_ocr:
+            processed += 1
+
+        height, width = frame.shape[:2]
+        for track_id, box, vehicle_conf in zip(ids, xyxy, confs):
+            bbox = expand_box(box, width, height, 0.15)
+            store.update_track(track_id, bbox, timestamp, float(vehicle_conf))
+
+            if not should_ocr:
+                continue
+
+            x1, y1, x2, y2 = bbox
+            if x2 <= x1 or y2 <= y1:
+                continue
+            vehicle_regions += 1
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+
+            scale = 2.0
+            crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+            found = False
+            for raw in catcher(crop):
+                found = True
+                plate_code = raw[0]
+                confidence = float(raw[1])
+                plate_type = int(raw[2])
+                plate_bbox = map_plate_bbox_from_crop([int(v) for v in raw[3]], bbox, scale)
+                before = len(store.tracks.get(track_id).candidates) if store.tracks.get(track_id) else 0
+                store.add_plate(
+                    track_id,
+                    plate_code,
+                    confidence,
+                    plate_type,
+                    timestamp,
+                    plate_bbox=plate_bbox,
+                )
+                after = len(store.tracks.get(track_id).candidates) if store.tracks.get(track_id) else 0
+                if after == before:
+                    rejected_count += 1
+            if not found:
+                rejected_count += 1
+
+    plates = store.final_results()
+    for plate in plates:
+        plate["plate_color"] = PLATE_COLOR_MAP.get(plate.get("plate_type", -1), "未知")
+
+    return {
+        "filename": filename,
+        "fps": round(fps, 1),
+        "total_frames": total_frames,
+        "duration_sec": round(duration, 1),
+        "sample_interval_sec": interval,
+        "processed_frames": processed,
+        "tracked_frames": tracked_frames,
+        "vehicle_regions": vehicle_regions,
+        "rejected_count": rejected_count,
+        "unique_plates": len(plates),
+        "elapsed_sec": round(time.perf_counter() - started, 1),
+        "tracker": "ByteTrack",
+        "plates": plates,
+    }
 
 # ─── 上传页面 ───────────────────────────────────────────
 
@@ -131,6 +278,16 @@ async def index():
     </div>
     <button class="btn btn-primary" id="btnVideo"
             onclick="recognizeVideo()">开始识别</button>
+    <div class="row" style="margin-top:16px;">
+      <label>本地调试视频:</label>
+      <select id="localVideoSelect"></select>
+    </div>
+    <button class="btn btn-primary" id="btnLocalVideo"
+            onclick="recognizeLocalVideo()">识别本地视频</button>
+    <a class="btn btn-primary" href="/local-live" target="_blank"
+       style="text-align:center;text-decoration:none;margin-top:12px;">
+      打开本地视频实时检测
+    </a>
   </div>
 
   <!-- 结果区 -->
@@ -193,6 +350,44 @@ function sourceLabel(source) {
   return source === 'vehicle' ? '车辆裁剪' : '整图';
 }
 
+function renderVideoResult(data, elapsed) {
+  if (data.error) {
+    showResult(`<p style="color:#d32f2f;">${data.error}</p>`);
+    return;
+  }
+
+  let html = `<div class="summary">📹 ${data.filename} | ⏱ 耗时 ${elapsed}s |
+              跟踪器 ${data.tracker || '-'} |
+              抽帧 ${data.processed_frames} 张 | 跟踪帧 ${data.tracked_frames || 0} 张 |
+              车辆区域 ${data.vehicle_regions || 0} 个 |
+              已过滤 ${data.rejected_count || 0} 个候选 |
+              输出 <b>${data.unique_plates}</b> 个稳定车牌</div>`;
+  if (data.plates.length) {
+    html += '<table><tr><th>轨迹</th><th>车牌号</th><th>颜色</th><th>置信度</th><th>候选数</th><th>出现时间</th></tr>';
+    data.plates.forEach(p => {
+      html += `<tr><td>#${p.track_id || '-'}</td><td><b>${p.plate_code}</b></td><td>${p.plate_color}</td>
+               <td>${(p.confidence*100).toFixed(1)}%</td><td>${p.candidate_count || 1}</td>
+               <td>${p.first_time ?? '-'}s - ${p.last_time ?? '-'}s</td></tr>`;
+    });
+    html += '</table>';
+  } else { html += '<p style="color:#999;">未识别到车牌</p>'; }
+  showResult(html);
+}
+
+async function loadLocalVideos() {
+  const select = $('localVideoSelect');
+  if (!select) return;
+  const res = await fetch('/local-videos');
+  const data = await res.json();
+  if (!data.videos.length) {
+    select.innerHTML = '<option value="">test_video 目录暂无视频</option>';
+    return;
+  }
+  select.innerHTML = data.videos.map(v =>
+    `<option value="${v.name}">${v.name} (${v.size_mb} MB)</option>`
+  ).join('');
+}
+
 // ── 图片识别 ──
 async function recognizeImage() {
   const file = $('fileImage').files[0];
@@ -235,25 +430,143 @@ async function recognizeVideo() {
   const data = await res.json();
   const elapsed = ((Date.now()-start)/1000).toFixed(1);
 
-  let html = `<div class="summary">📹 ${data.filename} | ⏱ 耗时 ${elapsed}s |
-              抽帧 ${data.processed_frames} 张 | 车辆区域 ${data.vehicle_regions || 0} 个 |
-              已过滤 ${data.rejected_count || 0} 个候选 |
-              输出 <b>${data.unique_plates}</b> 个稳定车牌</div>`;
-  if (data.plates.length) {
-    html += '<table><tr><th>轨迹</th><th>车牌号</th><th>颜色</th><th>置信度</th><th>候选数</th><th>出现时间</th></tr>';
-    data.plates.forEach(p => {
-      html += `<tr><td>#${p.track_id || '-'}</td><td><b>${p.plate_code}</b></td><td>${p.plate_color}</td>
-               <td>${(p.confidence*100).toFixed(1)}%</td><td>${p.candidate_count || 1}</td>
-               <td>${p.first_time ?? '-'}s - ${p.last_time ?? '-'}s</td></tr>`;
-    });
-    html += '</table>';
-  } else { html += '<p style="color:#999;">未识别到车牌</p>'; }
-  showResult(html);
+  renderVideoResult(data, elapsed);
   $('btnVideo').disabled = false;
 }
+
+async function recognizeLocalVideo() {
+  const name = $('localVideoSelect').value;
+  if (!name) return alert('请先选择本地视频');
+  const interval = parseFloat($('vidInterval').value) || 0.5;
+  $('btnLocalVideo').disabled = true;
+  showResult('<div class="loading"><span class="spinner"></span>本地视频处理中...</div>');
+
+  const start = Date.now();
+  const res = await fetch(`/recognize-local-video?name=${encodeURIComponent(name)}&interval=${interval}`, { method:'POST' });
+  const data = await res.json();
+  const elapsed = ((Date.now()-start)/1000).toFixed(1);
+  renderVideoResult(data, elapsed);
+  $('btnLocalVideo').disabled = false;
+}
+
+loadLocalVideos();
 </script>
 </body>
 </html>"""
+
+
+@app.get("/local-live", response_class=HTMLResponse)
+async def local_live_page():
+    videos = list_local_videos()
+    return """<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本地视频实时车牌检测</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background:#0f1923; color:#dce6f0; min-height:100vh; }
+  .topbar { padding:14px 18px; background:#1a2733; display:flex; align-items:center; gap:12px; border-bottom:1px solid #2a3a4a; }
+  select, button { padding:8px 12px; border-radius:6px; border:1px solid #345; background:#10202e; color:#e8edf2; }
+  button { cursor:pointer; background:#1a5fb4; border-color:#3478d4; font-weight:700; }
+  .status { margin-left:auto; font-size:13px; color:#89a; }
+  .main { height:calc(100vh - 106px); display:flex; align-items:center; justify-content:center; background:#081118; }
+  canvas { max-width:100%; max-height:100%; }
+  .plates { min-height:52px; padding:8px 14px; display:flex; gap:10px; flex-wrap:wrap; background:#1a2733; border-top:1px solid #2a3a4a; }
+  .plate { background:#1e3a2a; border:1px solid #2e5a3a; border-radius:6px; padding:6px 12px; color:#c8e6c9; font-weight:700; }
+  .muted { color:#789; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <strong>8003 本地视频实时检测</strong>
+  <select id="videoSelect"></select>
+  <button onclick="startVideo()">开始</button>
+  <span id="fpsInfo" class="muted">-</span>
+  <span id="inferInfo" class="muted">-</span>
+  <span class="status" id="status">未连接</span>
+</div>
+<div class="main">
+  <canvas id="canvas"></canvas>
+</div>
+<div class="plates" id="plates"><span class="muted">等待识别结果...</span></div>
+
+<script>
+const VIDEOS = """ + json.dumps(videos, ensure_ascii=False) + """;
+let ws = null;
+let canvas = document.getElementById('canvas');
+let ctx = canvas.getContext('2d');
+let frameCount = 0;
+let fpsStart = Date.now();
+let currentVideo = '';
+
+function renderVideos() {
+  const select = document.getElementById('videoSelect');
+  if (!VIDEOS.length) {
+    select.innerHTML = '<option value="">test_video 目录暂无视频</option>';
+    return;
+  }
+  select.innerHTML = VIDEOS.map(v =>
+    `<option value="${v.name}">${v.name} (${v.size_mb} MB)</option>`
+  ).join('');
+}
+
+function connectWS() {
+  if (ws) ws.close();
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws-local-live`);
+  ws.onopen = () => {
+    document.getElementById('status').textContent = '已连接';
+    if (currentVideo) ws.send(JSON.stringify({action:'switch', name:currentVideo}));
+  };
+  ws.onclose = () => document.getElementById('status').textContent = '已断开';
+  ws.onerror = () => document.getElementById('status').textContent = '连接失败';
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'error') {
+      document.getElementById('status').textContent = msg.msg;
+      return;
+    }
+    if (msg.type !== 'frame') return;
+
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+      frameCount++;
+      const now = Date.now();
+      if (now - fpsStart >= 1000) {
+        document.getElementById('fpsInfo').textContent = frameCount + ' FPS';
+        frameCount = 0;
+        fpsStart = now;
+      }
+    };
+    img.src = 'data:image/jpeg;base64,' + msg.frame;
+    document.getElementById('inferInfo').textContent = '推理: ' + (msg.inference_ms || '?') + 'ms';
+
+    const bar = document.getElementById('plates');
+    if (msg.plates && msg.plates.length) {
+      bar.innerHTML = msg.plates.map(p =>
+        `<span class="plate">#${p.track_id || '-'} ${p.code} ${(p.conf*100).toFixed(0)}%</span>`
+      ).join('');
+    } else {
+      bar.innerHTML = '<span class="muted">未检测到车牌</span>';
+    }
+  };
+}
+
+function startVideo() {
+  currentVideo = document.getElementById('videoSelect').value;
+  if (!currentVideo) return alert('请先选择本地视频');
+  if (!ws || ws.readyState !== WebSocket.OPEN) connectWS();
+  else ws.send(JSON.stringify({action:'switch', name:currentVideo}));
+}
+
+renderVideos();
+</script>
+</body>
+</html>"""
+
 
 # ─── 图片识别 API ────────────────────────────────────────
 
@@ -303,7 +616,7 @@ async def recognize_video(
     file: UploadFile = File(...),
     interval: float = Query(0.5, ge=0.1, le=10, description="抽帧间隔(秒)")
 ):
-    """上传视频文件，抽帧识别车牌并去重"""
+    """上传视频文件，用 ByteTrack 跟踪车辆并按轨迹聚合车牌。"""
     # 写入临时文件
     suffix = os.path.splitext(file.filename or "video.mp4")[1] or ".mp4"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -312,57 +625,128 @@ async def recognize_video(
         tmp.write(contents)
         tmp.close()
 
-        cap = cv2.VideoCapture(tmp.name)
-        if not cap.isOpened():
+        result = recognize_video_path(
+            tmp.name,
+            filename=file.filename or "video",
+            interval=interval,
+        )
+        if result is None:
             return JSONResponse({"error": "无法打开视频文件"}, status_code=400)
-
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = total_frames / fps if fps > 0 else 0
-
-        tracker = VehiclePlateTracker()
-        frame_idx = 0
-        processed = 0
-        vehicle_regions = 0
-        rejected_count = 0
-        frame_step = max(1, int(fps * interval)) if fps > 0 else 1
-
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if frame_idx % frame_step == 0:
-                processed += 1
-                timestamp = round(frame_idx / fps, 2) if fps > 0 else 0
-                plates, regions, rejected = recognize_with_vehicle_crops(
-                    frame,
-                    catcher,
-                    return_rejected=True,
-                )
-                vehicle_regions += sum(1 for region in regions if region.source == "vehicle")
-                rejected_count += len(rejected)
-                for plate in plates:
-                    plate["plate_color"] = PLATE_COLOR_MAP.get(plate["plate_type"], "未知")
-                tracker.update(regions, plates, timestamp)
-            frame_idx += 1
-        cap.release()
-
-        plates = tracker.final_results()
-
-        return {
-            "filename": file.filename,
-            "fps": round(fps, 1),
-            "total_frames": total_frames,
-            "duration_sec": round(duration, 1),
-            "sample_interval_sec": interval,
-            "processed_frames": processed,
-            "vehicle_regions": vehicle_regions,
-            "rejected_count": rejected_count,
-            "unique_plates": len(plates),
-            "plates": plates,
-        }
+        return result
     finally:
         os.unlink(tmp.name)
+
+
+@app.get("/local-videos")
+async def local_videos():
+    """列出 test_video 目录中的本地调试视频。"""
+    return {"videos": list_local_videos()}
+
+
+@app.post("/recognize-local-video")
+async def recognize_local_video(
+    name: str = Query(..., description="test_video 目录下的视频文件名"),
+    interval: float = Query(0.5, ge=0.1, le=10, description="抽帧间隔(秒)")
+):
+    """直接识别本地 test_video 视频，作为 8003 调试入口。"""
+    path = resolve_local_video(name)
+    if path is None:
+        return JSONResponse({"error": "本地视频不存在"}, status_code=404)
+
+    result = recognize_video_path(str(path), filename=path.name, interval=interval)
+    if result is None:
+        return JSONResponse({"error": "无法打开视频文件"}, status_code=400)
+    result["local_video"] = True
+    return result
+
+
+@app.websocket("/ws-local-live")
+async def websocket_local_live(ws: WebSocket):
+    """8003 本地视频实时检测：复用 8004 的 StreamManager，但只允许 test_video 文件。"""
+    await ws.accept()
+    manager = LiveStreamManager()
+    send_queue = queue.Queue(maxsize=5)
+    reader_thread = None
+    stop_event = threading.Event()
+
+    def reader():
+        frame_count = 0
+        while not stop_event.is_set() and manager.running:
+            frame, plates, _overlay_plates, infer_ms = manager.read_frame()
+            if frame is None:
+                time.sleep(0.1)
+                continue
+
+            frame_count += 1
+            ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not ok:
+                continue
+
+            payload = {
+                "type": "frame",
+                "frame": base64.b64encode(jpeg).decode(),
+                "plates": plates,
+                "inference_ms": infer_ms,
+            }
+            try:
+                send_queue.put_nowait(payload)
+            except queue.Full:
+                try:
+                    send_queue.get_nowait()
+                    send_queue.put_nowait(payload)
+                except queue.Empty:
+                    pass
+
+            if frame_count % 150 == 0 and plates:
+                print(f"  [LOCAL-LIVE] frame #{frame_count}: {[p['code'] for p in plates]}")
+            time.sleep(0.03)
+
+    async def sender():
+        while not stop_event.is_set():
+            try:
+                await ws.send_json(send_queue.get_nowait())
+            except queue.Empty:
+                await asyncio.sleep(0.03)
+            except Exception:
+                break
+
+    send_task = asyncio.create_task(sender())
+
+    try:
+        while True:
+            msg = json.loads(await ws.receive_text())
+            if msg.get("action") != "switch":
+                continue
+
+            path = resolve_local_video(msg.get("name", ""))
+            if path is None:
+                await ws.send_json({"type": "error", "msg": "本地视频不存在"})
+                continue
+
+            manager.close()
+            if reader_thread and reader_thread.is_alive():
+                reader_thread.join(timeout=1)
+            while not send_queue.empty():
+                try:
+                    send_queue.get_nowait()
+                except queue.Empty:
+                    break
+
+            print(f"[8003-LOCAL-LIVE] Switch to {path.name}")
+            if manager.open(str(path), path.name):
+                reader_thread = threading.Thread(target=reader, daemon=True)
+                reader_thread.start()
+                await ws.send_json({"type": "status", "video": path.name, "connected": True})
+            else:
+                await ws.send_json({"type": "error", "msg": f"Can not open: {path.name}"})
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        stop_event.set()
+        manager.close()
+        send_task.cancel()
+        print("[8003-LOCAL-LIVE] Disconnected")
 
 
 if __name__ == "__main__":

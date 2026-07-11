@@ -18,16 +18,18 @@ import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 import uvicorn
+from pathlib import Path
 
 from gpu_patch import catcher  # GPU 加速版
-from vehicle_lpr import get_vehicle_model, recognize_with_vehicle_crops
-from video_plate_tracker import VehiclePlateTracker, similar_plate
+from vehicle_lpr import get_vehicle_model, Region, expand_box
+from video_plate_tracker import VehiclePlateTracker
 
 app = FastAPI(title="实时车牌识别")
 
 LIVE_RECOGNITION_INTERVAL_SEC = 0.5
 LIVE_BOX_TTL_SEC = 0.25
 LIVE_RESULT_TTL_SEC = 2.0
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @app.on_event("startup")
@@ -38,8 +40,6 @@ async def warmup_models():
 
 # ── 摄像头列表 ────────────────────────────────────────────
 CAMERAS = [
-    # ═══ 本地测试 ═══
-    {"id": "99", "name": "本地测试视频 test12", "url": "rtsp://127.0.0.1:8554/live/test12"},
     {"id": "0",  "name": "本机摄像头",  "url": "0"},
     # ═══ 沙盘 RTSP（需内网 10.126.59.x）═══
     {"id": "1",  "name": "桥面",       "url": "rtsp://10.126.59.120:8554/live/live1"},
@@ -49,8 +49,8 @@ CAMERAS = [
     {"id": "5",  "name": "桥出口",     "url": "rtsp://10.126.59.120:8554/live/live5"},
     {"id": "6",  "name": "桥入口",     "url": "rtsp://10.126.59.120:8554/live/live6"},
     {"id": "7",  "name": "道路2",      "url": "rtsp://10.126.59.120:8554/live/live7"},
-    {"id": "8",  "name": "隧道(事故)",  "url": "rtsp://10.126.59.120:8554/live/live8"},
-    {"id": "9",  "name": "隧道(车载)",  "url": "rtsp://10.126.59.120:8554/live/live9"},
+    {"id": "8",  "name": "隧道(事故)", "url": "rtsp://10.126.59.120:8554/live/live8"},
+    {"id": "9",  "name": "隧道(车载)", "url": "rtsp://10.126.59.120:8554/live/live9"},
     {"id": "10", "name": "道路1",       "url": "rtsp://10.126.59.120:8554/live/live10"},
     {"id": "11", "name": "停车场入口",  "url": "rtsp://10.126.59.120:8554/live/live11"},
     {"id": "12", "name": "道路1",       "url": "rtsp://10.126.59.120:8554/live/live12"},
@@ -63,25 +63,87 @@ PLATE_COLOR_MAP = {
 }
 
 
+DETECT_INTERVAL_SEC = 0.1       # YOLO 检测频率
+DETECT_EXPAND_RATIO = 0.15      # 裁切时向外扩展比例
+DISPLAY_TRACK_TTL_SEC = 0.45    # 检测框太旧就不画，避免滞后框
+OCR_TASK_MAX_AGE_SEC = 1.2      # OCR 迟到太久就丢弃，避免错绑
+LOW_TRAFFIC_MAX_VEHICLES = 2    # 少车场景更积极 OCR
+LOW_TRAFFIC_OCR_COOLDOWN = 0.3
+HIGH_TRAFFIC_OCR_COOLDOWN = 2.0
+BOX_THICKNESS = 4
+LABEL_FONT_SCALE = 1.1
+LABEL_THICKNESS = 3
+
+
+def draw_labeled_box(frame, bbox, label: str, color):
+    x1, y1, x2, y2 = map(int, bbox)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, BOX_THICKNESS)
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (text_w, text_h), baseline = cv2.getTextSize(
+        label,
+        font,
+        LABEL_FONT_SCALE,
+        LABEL_THICKNESS,
+    )
+    pad_x, pad_y = 8, 6
+    bg_x1 = x1
+    bg_y2 = y1 - 6
+    bg_y1 = bg_y2 - text_h - baseline - pad_y * 2
+    if bg_y1 < 0:
+        bg_y1 = y1 + 6
+        bg_y2 = bg_y1 + text_h + baseline + pad_y * 2
+    bg_x2 = min(frame.shape[1] - 1, bg_x1 + text_w + pad_x * 2)
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.62, frame, 0.38, 0, frame)
+    cv2.rectangle(frame, (bg_x1, bg_y1), (bg_x2, bg_y2), color, 2)
+
+    text_org = (bg_x1 + pad_x, bg_y2 - baseline - pad_y)
+    cv2.putText(
+        frame,
+        label,
+        text_org,
+        font,
+        LABEL_FONT_SCALE,
+        (255, 255, 255),
+        LABEL_THICKNESS + 2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        label,
+        text_org,
+        font,
+        LABEL_FONT_SCALE,
+        color,
+        LABEL_THICKNESS,
+        cv2.LINE_AA,
+    )
+
 class StreamManager:
-    """管理每个 WebSocket 连接的流状态"""
+    """三线程架构：画面线程 + 检测线程(YOLO) + 识别线程(HyperLPR3)"""
 
     def __init__(self):
         self.cap = None
         self.current_cam = None
         self.running = False
-        self.lock = threading.Lock()
-        self.tracker = VehiclePlateTracker(max_missed=8)
+        self.tracker = VehiclePlateTracker(max_missed=15)
         self.stream_started_at = time.perf_counter()
-        self.last_recognition_at = 0.0
-        self.last_plates = []
         self.last_inference_ms = 0
+        # ── 共享状态 ──
+        self._latest_frame = None
+        self._ocr_queue = queue.Queue(maxsize=20)
+        self._detect_thread = None
+        self._recog_thread = None
+        self._detect_running = False
+        self._recog_running = False
 
     def open(self, url: str, cam_name: str):
         self.close()
         time.sleep(0.5)
 
-        # 本地摄像头 vs RTSP
         if url.isdigit():
             cap = cv2.VideoCapture(int(url), cv2.CAP_DSHOW)
         else:
@@ -92,119 +154,206 @@ class StreamManager:
             ret, frame = cap.read()
             if ret:
                 h, w = frame.shape[:2]
-                print(f"  [DEBUG] Resolution: {w}x{h}, dtype: {frame.dtype}, channels: {frame.shape[2] if len(frame.shape)>2 else 1}")
+                print(f"  [DEBUG] Resolution: {w}x{h}")
                 self.cap = cap
                 self.current_cam = cam_name
                 self.running = True
-                self.tracker = VehiclePlateTracker(max_missed=8)
+                self.tracker = VehiclePlateTracker(max_missed=15)
                 self.stream_started_at = time.perf_counter()
-                self.last_recognition_at = 0.0
-                self.last_plates = []
                 self.last_inference_ms = 0
+                self._latest_frame = None
+                # 清空 OCR 队列
+                while not self._ocr_queue.empty():
+                    try: self._ocr_queue.get_nowait()
+                    except queue.Empty: break
+                # 启动两个后台线程
+                self._detect_running = True
+                self._recog_running = True
+                self._detect_thread = threading.Thread(target=self._detection_loop, daemon=True)
+                self._recog_thread = threading.Thread(target=self._recognition_loop, daemon=True)
+                self._detect_thread.start()
+                self._recog_thread.start()
                 return True
-            else:
-                print(f"  [DEBUG] cap opened but read() returned False")
             cap.release()
-        else:
-            print(f"  [DEBUG] cap.isOpened() = False")
+        print(f"  [DEBUG] Failed to open stream")
         return False
 
-    def _merge_live_results(self, stable_results, timestamp: float):
-        recent = [
-            item for item in stable_results
-            if timestamp - float(item.get("last_time", timestamp)) <= LIVE_RESULT_TTL_SEC
-        ]
-
-        merged = []
-        for item in recent:
-            for idx, existing in enumerate(merged):
-                if similar_plate(item["plate_code"], existing["plate_code"]):
-                    item_score = (
-                        item.get("candidate_count", 1),
-                        item.get("confidence", 0),
-                        item.get("last_time", 0),
-                    )
-                    existing_score = (
-                        existing.get("candidate_count", 1),
-                        existing.get("confidence", 0),
-                        existing.get("last_time", 0),
-                    )
-                    if item_score > existing_score:
-                        merged[idx] = item
-                    break
-            else:
-                merged.append(item)
-
-        return sorted(merged, key=lambda item: item.get("last_time", 0), reverse=True)
+    # ═══ 画面线程 ═══
 
     def read_frame(self):
-        """读取一帧，定时跑车辆裁剪识别，并复用稳定轨迹结果。"""
+        """只读帧 + 画 tracker 实时位置，不做推理。"""
         if not self.cap or not self.running:
-            return None, [], 0
+            return None, [], [], 0
         ret, frame = self.cap.read()
         if not ret:
-            return None, [], 0
+            return None, [], [], 0
 
-        now = time.perf_counter()
-        timestamp = round(now - self.stream_started_at, 2)
-        if now - self.last_recognition_at >= LIVE_RECOGNITION_INTERVAL_SEC:
-            t0 = time.perf_counter()
-            plates, regions, _rejected = recognize_with_vehicle_crops(
-                frame,
-                catcher,
-                return_rejected=True,
-            )
-            elapsed = round((time.perf_counter() - t0) * 1000, 1)
+        # 喂帧给检测线程
+        self._latest_frame = frame.copy()
 
-            for plate in plates:
-                plate["plate_color"] = PLATE_COLOR_MAP.get(plate["plate_type"], "未知")
-            self.tracker.update(regions, plates, timestamp)
-            self.tracker.tracks = [
-                track for track in self.tracker.tracks
-                if timestamp - track.last_time <= LIVE_RESULT_TTL_SEC
-            ]
-
-            stable = self._merge_live_results(self.tracker.final_results(), timestamp)
-            self.last_plates = [
-                {
-                    "code": p["plate_code"],
-                    "conf": round(float(p["confidence"]), 3),
-                    "color": p.get("plate_color", PLATE_COLOR_MAP.get(p.get("plate_type"), "未知")),
-                    "bbox": [int(v) for v in p.get("bbox", [0, 0, 0, 0])],
-                    "track_id": p.get("track_id"),
-                    "candidate_count": p.get("candidate_count", 1),
-                    "first_time": p.get("first_time"),
-                    "last_time": p.get("last_time"),
-                }
-                for p in stable
-            ]
-            self.last_inference_ms = elapsed
-            self.last_recognition_at = now
-
-        plates = [
-            p for p in self.last_plates
-            if timestamp - float(p.get("last_time", timestamp)) <= LIVE_RESULT_TTL_SEC
-        ]
-        overlay_plates = [
-            p for p in plates
-            if timestamp - float(p.get("last_time", timestamp)) <= LIVE_BOX_TTL_SEC
-        ]
-        elapsed = self.last_inference_ms
-
-        # 在帧上画框
-        for p in overlay_plates:
-            x1, y1, x2, y2 = p["bbox"]
+        # 从 tracker 拿足够新的轨道画框；旧框宁可不画，避免明显滞后。
+        timestamp = round(time.perf_counter() - self.stream_started_at, 2)
+        tracks = self.tracker.active_tracks(timestamp=timestamp, max_age=DISPLAY_TRACK_TTL_SEC)
+        plates = []
+        overlay_plates = []
+        for t in tracks:
+            x1, y1, x2, y2 = map(int, t["bbox"])
             if x2 <= x1 or y2 <= y1:
                 continue
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            label = f"#{p.get('track_id', '-')} {p['code']} ({p['conf']:.0%})"
-            cv2.putText(frame, label, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            has_plate = t["plate_code"] and len(t["plate_code"]) >= 4
+            color = (0, 0, 255) if not has_plate else (0, 255, 0)  # 红=待识别，绿=已有车牌
 
-        return frame, plates, elapsed
+            label = f"#{t['track_id']}"
+            if has_plate:
+                label += f" {t['plate_code']} ({t['plate_conf']:.0%})"
+            draw_labeled_box(frame, (x1, y1, x2, y2), label, color)
+
+            plates.append({
+                "code": t["plate_code"] or "???",
+                "conf": t["plate_conf"],
+                "color": PLATE_COLOR_MAP.get(t["plate_type"], "未知"),
+                "bbox": [x1, y1, x2, y2],
+                "track_id": t["track_id"],
+            })
+            overlay_plates.append({
+                "code": t["plate_code"] or "???",
+                "conf": t["plate_conf"],
+                "bbox": [x1, y1, x2, y2],
+                "track_id": t["track_id"],
+            })
+
+        return frame, plates, overlay_plates, self.last_inference_ms
+
+    # ═══ 检测线程 (YOLO, ~10Hz) ═══
+
+    def _detection_loop(self):
+        """快速循环：YOLO 找车 → 更新 tracker 位置 → 推裁切图到 OCR 队列。"""
+        vehicle_model = get_vehicle_model()
+        while self._detect_running and self.running:
+            frame = self._latest_frame
+            if frame is None:
+                time.sleep(0.05)
+                continue
+
+            t0 = time.perf_counter()
+            timestamp = round(time.perf_counter() - self.stream_started_at, 2)
+
+            results = vehicle_model.predict(frame, classes=[2, 3, 5, 7],
+                                            imgsz=640, verbose=False, conf=0.3)
+            boxes = results[0].boxes
+
+            # 构建 Region 列表送给 tracker
+            regions = []
+
+            for box in boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                conf = float(box.conf[0])
+                x1e, y1e, x2e, y2e = expand_box(
+                    (x1, y1, x2, y2),
+                    frame.shape[1],
+                    frame.shape[0],
+                    DETECT_EXPAND_RATIO,
+                )
+                regions.append(Region(source="vehicle", bbox=(x1e, y1e, x2e, y2e),
+                                      vehicle_confidence=conf))
+
+            vehicle_count = len(regions)
+            if vehicle_count <= LOW_TRAFFIC_MAX_VEHICLES:
+                min_hits_for_ocr = 1
+                ocr_cooldown = LOW_TRAFFIC_OCR_COOLDOWN
+            else:
+                min_hits_for_ocr = 2
+                ocr_cooldown = HIGH_TRAFFIC_OCR_COOLDOWN
+
+            ocr_candidates = self.tracker.update_regions(
+                regions,
+                timestamp,
+                min_hits_for_ocr=min_hits_for_ocr,
+                ocr_cooldown=ocr_cooldown,
+                stop_ocr_confidence=0.95,
+            )
+
+            # 需要 OCR 的：裁切2倍放大，丢进队列
+            for track, bbox in ocr_candidates:
+                x1, y1, x2, y2 = map(int, bbox)
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                crop = frame[y1:y2, x1:x2]
+                crop = cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+                try:
+                    self._ocr_queue.put_nowait((track.track_id, crop, bbox, timestamp))
+                except queue.Full:
+                    self.tracker.cancel_ocr(track.track_id, timestamp)
+                    pass  # 队列满了就丢弃
+
+            self.last_inference_ms = round((time.perf_counter() - t0) * 1000, 1)
+            time.sleep(DETECT_INTERVAL_SEC)
+
+    # ═══ 识别线程 (HyperLPR3, 队列驱动) ═══
+
+    def _recognition_loop(self):
+        """从队列取裁切图，跑 HyperLPR3，结果绑定到 track_id。"""
+        while self._recog_running and self.running:
+            try:
+                track_id, crop, bbox, task_timestamp = self._ocr_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            now = round(time.perf_counter() - self.stream_started_at, 2)
+            if now - task_timestamp > OCR_TASK_MAX_AGE_SEC:
+                self.tracker.cancel_ocr(track_id, now)
+                continue
+
+            results = catcher(crop)
+            timestamp = round(time.perf_counter() - self.stream_started_at, 2)
+            if results:
+                best = results[0]
+                code, conf, ptype = best[0], float(best[1]), int(best[2])
+                if code and len(code) >= 4:
+                    self.tracker.assign_plate(
+                        track_id,
+                        code,
+                        conf,
+                        ptype,
+                        timestamp,
+                        task_bbox=bbox,
+                        task_timestamp=task_timestamp,
+                        max_task_age=OCR_TASK_MAX_AGE_SEC,
+                    )
+                else:
+                    self.tracker.assign_plate(
+                        track_id,
+                        "",
+                        0.0,
+                        -1,
+                        timestamp,
+                        task_bbox=bbox,
+                        task_timestamp=task_timestamp,
+                        max_task_age=OCR_TASK_MAX_AGE_SEC,
+                    )
+            else:
+                self.tracker.assign_plate(
+                    track_id,
+                    "",
+                    0.0,
+                    -1,
+                    timestamp,
+                    task_bbox=bbox,
+                    task_timestamp=task_timestamp,
+                    max_task_age=OCR_TASK_MAX_AGE_SEC,
+                )
+
+    # ═══ 清理 ═══
 
     def close(self):
         self.running = False
+        self._detect_running = False
+        self._recog_running = False
+        for t in [self._detect_thread, self._recog_thread]:
+            if t and t.is_alive():
+                t.join(timeout=1)
         if self.cap:
             self.cap.release()
             self.cap = None
@@ -236,6 +385,13 @@ async def index():
   .cam-btn:hover { background: #253545; border-color: #3a5a7a; }
   .cam-btn.active { background: #1a3a5c; border-color: #5b9cf5; color: #fff; font-weight: 600; }
   .cam-btn .id { color: #5b9cf5; font-weight: 700; margin-right: 6px; }
+  .local-live-link { display: block; width: 100%; padding: 12px 14px;
+             border: 1px solid #3478d4; border-radius: 8px;
+             background: #16324a; color: #e8f2ff; font-size: 13px;
+             text-decoration: none; font-weight: 700; transition: .15s; }
+  .local-live-link:hover { background: #1c4264; border-color: #5b9cf5; }
+  .local-live-link small { display: block; color: #8aa9c8; font-size: 11px;
+             font-weight: 400; margin-top: 4px; }
   .status { margin-top: auto; padding: 10px; background: #12202b;
             border-radius: 8px; font-size: 12px; color: #7a8a9a; }
   .status .dot { display: inline-block; width: 8px; height: 8px;
@@ -275,6 +431,10 @@ async def index():
 <div class="sidebar">
   <h2>沙盘摄像头</h2>
   <div id="camList"></div>
+  <a class="local-live-link" href="http://localhost:8003/local-live" target="_blank" rel="noopener">
+    本地视频实时检测
+    <small>跳转到 8003 调试页</small>
+  </a>
   <div class="status">
     <span class="dot" id="statusDot"></span>
     <span id="statusText">等待连接...</span>
@@ -308,17 +468,14 @@ let frameCount = 0;
 let lastFpsTime = Date.now();
 let fpsVal = 0;
 
-// ── 渲染摄像头列表 ──
 function renderCamList() {
-  const container = document.getElementById('camList');
-  container.innerHTML = CAMERAS.map(c =>
+  document.getElementById('camList').innerHTML = CAMERAS.map(c =>
     `<button class="cam-btn" data-id="${c.id}" onclick="switchCam('${c.id}')">
       <span class="id">#${c.id}</span>${c.name}
     </button>`
   ).join('');
 }
 
-// ── 切换摄像头 ──
 function switchCam(id) {
   currentCam = id;
   document.querySelectorAll('.cam-btn').forEach(b =>
@@ -334,52 +491,41 @@ function switchCam(id) {
   }
 }
 
-// ── WebSocket 连接 ──
 function connectWS() {
   if (ws) ws.close();
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${protocol}//${location.host}/ws`);
-
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
   ws.onopen = () => {
     setStatus(true, '已连接');
-    if (currentCam) {
-      ws.send(JSON.stringify({ action: 'switch', camera: currentCam }));
-    }
+    if (currentCam) ws.send(JSON.stringify({action:'switch',camera:currentCam}));
   };
+  ws.onclose = () => setStatus(false, '已断开');
+  ws.onerror = () => setStatus(false, '连接失败');
 
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
-
     if (msg.type === 'frame') {
-      // 解码并渲染帧
       const img = new Image();
       img.onload = () => {
         canvas.width = img.width;
         canvas.height = img.height;
         ctx.drawImage(img, 0, 0);
         document.getElementById('noSignal').style.display = 'none';
-
-        // 计算 FPS
         frameCount++;
         const now = Date.now();
         if (now - lastFpsTime >= 1000) {
-          fpsVal = frameCount;
-          frameCount = 0;
-          lastFpsTime = now;
+          fpsVal = frameCount; frameCount = 0; lastFpsTime = now;
         }
       };
       img.src = 'data:image/jpeg;base64,' + msg.frame;
-
       document.getElementById('fpsInfo').textContent = fpsVal + ' FPS';
       document.getElementById('inferInfo').textContent =
         '推理: ' + (msg.inference_ms || '?') + 'ms';
 
-      // 更新底部车牌列表
       const bar = document.getElementById('platesBar');
       if (msg.plates && msg.plates.length) {
         bar.innerHTML = msg.plates.map(p =>
           `<span class="plate-tag">#${p.track_id || '-'} ${p.code}
-            <span class="conf">${(p.conf*100).toFixed(0)}% / ${p.candidate_count || 1}帧</span>
+            <span class="conf">${(p.conf*100).toFixed(0)}%</span>
           </span>`
         ).join('');
       } else {
@@ -387,9 +533,6 @@ function connectWS() {
       }
     }
   };
-
-  ws.onclose = () => setStatus(false, '已断开');
-  ws.onerror = () => setStatus(false, '连接失败');
 }
 
 function setStatus(live, text) {
@@ -397,7 +540,6 @@ function setStatus(live, text) {
   document.getElementById('statusText').textContent = text;
 }
 
-// ── 初始化 ──
 renderCamList();
 </script>
 </body>
@@ -414,20 +556,19 @@ async def websocket_endpoint(ws: WebSocket):
     stop_event = threading.Event()
 
     def reader():
-        """在独立线程中读 RTSP 帧、识别、编码"""
+        """画面线程：读帧 → JPEG 编码 → WebSocket 推流。"""
         frame_count = 0
         empty_count = 0
         t0 = time.time()
         while not stop_event.is_set() and manager.running:
-            frame, plates, infer_ms = manager.read_frame()
+            frame, plates, overlay_plates, infer_ms = manager.read_frame()
             frame_count += 1
 
             if frame is None:
                 empty_count += 1
                 time.sleep(0.3)
-                # 每 5 秒打印一次状态
                 if time.time() - t0 > 5:
-                    print(f"  [DEBUG] {frame_count} read attempts, {empty_count} empty frames (no data from stream)")
+                    print(f"  [DEBUG] {frame_count} read attempts, {empty_count} empty frames")
                     t0 = time.time()
                 continue
 
@@ -440,7 +581,6 @@ async def websocket_endpoint(ws: WebSocket):
                 "plates": plates,
                 "inference_ms": infer_ms,
             }
-
             try:
                 send_queue.put_nowait(payload)
             except queue.Full:
@@ -450,9 +590,8 @@ async def websocket_endpoint(ws: WebSocket):
                 except queue.Empty:
                     pass
 
-            # 每 5 秒打印识别统计
             if frame_count % 150 == 0 and plates:
-                print(f"  [DEBUG] frame #{frame_count}: detected {len(plates)} plates: {[p['code'] for p in plates]}")
+                print(f"  [DEBUG] frame #{frame_count}: {len(plates)} plates: {[p['code'] for p in plates]}")
 
             time.sleep(0.03)
 
@@ -482,12 +621,9 @@ async def websocket_endpoint(ws: WebSocket):
                     manager.close()
                     if reader_thread and reader_thread.is_alive():
                         reader_thread.join(timeout=1)
-                    # 清空旧队列
                     while not send_queue.empty():
-                        try:
-                            send_queue.get_nowait()
-                        except queue.Empty:
-                            break
+                        try: send_queue.get_nowait()
+                        except queue.Empty: break
 
                     if manager.open(cam["url"], cam["name"]):
                         print(f"  Connected")

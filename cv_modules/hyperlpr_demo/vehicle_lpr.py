@@ -14,9 +14,10 @@ import cv2
 
 
 VEHICLE_CLASS_IDS = [2, 3, 5, 7]  # car, motorcycle, bus, truck in COCO
+DEFAULT_VEHICLE_MODEL = "yolov8s.pt"
 PROVINCES = set("京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼")
 SPECIAL_PLATE_PREFIXES = ("使", "领", "警", "学", "港", "澳")
-_vehicle_model = None
+_vehicle_models = {}
 
 
 @dataclass(frozen=True)
@@ -26,14 +27,13 @@ class Region:
     vehicle_confidence: float | None = None
 
 
-def get_vehicle_model(model_path: str = "yolov8n.pt"):
+def get_vehicle_model(model_path: str = DEFAULT_VEHICLE_MODEL):
     """Lazily load the vehicle detector so importing this module stays cheap."""
-    global _vehicle_model
-    if _vehicle_model is None:
+    if model_path not in _vehicle_models:
         from ultralytics import YOLO
 
-        _vehicle_model = YOLO(model_path)
-    return _vehicle_model
+        _vehicle_models[model_path] = YOLO(model_path)
+    return _vehicle_models[model_path]
 
 
 def expand_box(
@@ -58,7 +58,7 @@ def expand_box(
 def detect_vehicle_regions(
     image,
     *,
-    model_path: str = "yolov8n.pt",
+    model_path: str = DEFAULT_VEHICLE_MODEL,
     conf: float = 0.25,
     imgsz: int = 640,
     margin_ratio: float = 0.12,
@@ -173,7 +173,7 @@ def recognize_with_vehicle_crops(
     plate_catcher,
     *,
     full_frame_mode: str = "fallback",
-    vehicle_model_path: str = "yolov8n.pt",
+    vehicle_model_path: str = DEFAULT_VEHICLE_MODEL,
     vehicle_conf: float = 0.25,
     vehicle_imgsz: int = 640,
     crop_scale: float = 2.0,
