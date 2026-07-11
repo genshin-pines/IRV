@@ -69,7 +69,8 @@ def _patched_run(self, image):
             plate_code, rec_confidence = self.recognizer(pad)
         if plate_code == '':
             continue
-        if len(plate_code) >= 7:
+        # ★ 原: len(plate_code) >= 7  →  改: >= 4
+        if len(plate_code) >= 4:
             plate_type = pipeline.code_filter(plate_code)
             if plate_type == pipeline.UNKNOWN:
                 cls = self.classifier(pad)

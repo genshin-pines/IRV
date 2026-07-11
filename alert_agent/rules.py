@@ -40,9 +40,9 @@ class PlateLowConfidenceRule:
                 continue
             message = _message(log)
             match = re.search(r"(confidence|conf|置信度)\D*(0(?:\.\d+)?|1(?:\.0+)?)", message, re.I)
-            if match and float(match.group(2)) < 0.99:  # TODO-TEST: revert to 0.75
+            if match and float(match.group(2)) < 0.90:
                 hits.append(message)
-        if len(hits) >= 1:  # TODO-TEST: revert to 5
+        if len(hits) >= 1:
             return RuleResult(
                 self.rule_id,
                 AlertLevel.WARNING,

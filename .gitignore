@@ -2,6 +2,7 @@
 *.db
 __pycache__/
 *.pyc
+*.pt
 .venv/
 venv/
 uploads/*
