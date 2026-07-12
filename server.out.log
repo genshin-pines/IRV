@@ -1,0 +1,115 @@
+INFO:     127.0.0.1:60457 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60476 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50474 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50704 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54691 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55536 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55536 - "GET /static/vendor/vue.global.prod.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56218 - "GET /static/vendor/naive-ui.prod.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61116 - "GET /static/vendor/anime.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62469 - "GET /static/vendor/echarts.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65229 - "GET /static/vendor/lucide.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65240 - "HEAD /static/vendor/vue.global.prod.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65241 - "HEAD /static/vendor/naive-ui.prod.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65242 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65246 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58344 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58344 - "GET /static/vendor/vue.global.prod.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:63646 - "GET /static/vendor/naive-ui.prod.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:56679 - "GET /static/vendor/echarts.min.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62810 - "GET /static/vendor/anime.min.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:56751 - "GET /static/vendor/lucide.min.js HTTP/1.1" 304 Not Modified
+INFO:     127.0.0.1:62810 - "GET /api/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56751 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56679 - "GET /api/alerts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60544 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60795 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60795 - "GET /static/vendor/vue.global.prod.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64900 - "GET /static/vendor/echarts.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62235 - "GET /static/vendor/naive-ui.prod.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51699 - "GET /static/vendor/anime.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62542 - "GET /static/vendor/lucide.min.js HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62235 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64900 - "GET /api/alerts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62542 - "GET /api/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58192 - "GET /api/cameras/live3/stream?fps=8&width=1080&t=1783505408193 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60377 - "GET /api/cameras/live3/stream?fps=8&width=1080&t=1783505414132 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58706 - "GET /api/cameras/live7/stream?fps=8&width=1080&t=1783505414710 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56695 - "GET /api/cameras/live11/stream?fps=8&width=1080&t=1783505415976 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51997 - "GET /api/cameras/live10/stream?fps=8&width=1080&t=1783505416974 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53392 - "GET /api/cameras/live5/stream?fps=8&width=1080&t=1783505417696 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62366 - "GET /api/cameras/live1/stream?fps=8&width=1080&t=1783505418243 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61318 - "GET /api/cameras/live2/stream?fps=8&width=1080&t=1783505418638 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63698 - "GET /api/cameras/live6/stream?fps=8&width=1080&t=1783505419169 HTTP/1.1" 200 OK
+[StreamManager] Using local webcam index=0
+[StreamManager] Resolution: 640x480
+[StreamManager] ffmpeg: ffmpeg
+[GestureEngine] detector: D:\download\git\IRV\IRV_main\vendor\web_gesture_backend\dgcore\models\hand_detector.onnx
+[GestureEngine] classifier: D:\download\git\IRV\IRV_main\vendor\web_gesture_backend\dgcore\models\crops_classifier.onnx
+Using ONNX Runtime CPU
+Using ONNX Runtime CPU
+[StreamManager] ffmpeg disabled: [WinError 2] 系统找不到指定的文件。
+[StreamManager] Started
+INFO:     127.0.0.1:53081 - "POST /api/gesture/start HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53081 - "GET /api/gesture/video-feed?t=1783505511700 HTTP/1.1" 200 OK
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Inference error: '<=' not supported between instances of 'int' and 'NoneType'
+[StreamManager] Stopped
+INFO:     127.0.0.1:52592 - "POST /api/gesture/stop HTTP/1.1" 200 OK
+[StreamManager] Connecting: rtsp://10.126.59.120:8554/live/live1
+[StreamManager] Cannot open: rtsp://10.126.59.120:8554/live/live1
+INFO:     127.0.0.1:52592 - "POST /api/gesture/start HTTP/1.1" 400 Bad Request
+[StreamManager] Connecting: rtsp://10.126.59.120:8554/live/live1
+[StreamManager] Cannot open: rtsp://10.126.59.120:8554/live/live1
+INFO:     127.0.0.1:52592 - "POST /api/gesture/start HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52592 - "POST /api/gesture/events HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62486 - "GET /api/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60527 - "POST /api/logs/simulate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60527 - "GET /api/alerts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60527 - "POST /api/logs/simulate HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60527 - "GET /api/alerts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60148 - "GET /api/cameras HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51377 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60527 - "GET /api/alerts HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54924 - "GET /api/health HTTP/1.1" 200 OK
