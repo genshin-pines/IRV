@@ -12,6 +12,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.services.camera_service import get_camera
+from backend.services.mobile_camera_service import (
+    acquire_session as acquire_mobile_session,
+    get_connected_source,
+    is_session_cancelled as mobile_session_cancelled,
+    release_session as release_mobile_session,
+    report_frame_received,
+    report_stream_error,
+)
 from backend.services.log_service import write_log
 from backend.services.optimized_traffic_service import (
     create_capture as create_optimized_capture,
@@ -135,24 +143,39 @@ async def api_optimized_live(ws: WebSocket):
 async def api_optimized_camera_live(ws: WebSocket):
     await ws.accept()
     capture = None
+    source_type = ""
+    mobile_session_acquired = False
     try:
         request = await ws.receive_json()
+        source_type = str(request.get("source_type", ""))
+        source_url = request.get("source_url") or None
+        if source_type == "mobile_stream":
+            source_url = get_connected_source()
+            if not source_url:
+                await ws.send_json({"type": "error", "message": "请先连接手机视频源"})
+                return
+            if not acquire_mobile_session():
+                await ws.send_json({"type": "error", "message": "手机视频源正在识别，请先停止当前会话"})
+                return
+            mobile_session_acquired = True
         await ws.send_json({"type": "status", "message": "正在加载优化 BiLSTM 模型"})
         runtime = await get_optimized_runtime()
         session = create_optimized_session(runtime)
         capture = create_optimized_capture(
             camera_index=int(request.get("camera_index", 0)),
-            source_url=request.get("source_url") or None,
+            source_url=source_url,
         )
         await asyncio.to_thread(capture.start)
         await ws.send_json({"type": "status", "message": "优化交警手势摄像头识别已启动"})
         sequence = 0
         processed = 0
         started = asyncio.get_running_loop().time()
-        while capture.running:
+        while capture.running and not (source_type == "mobile_stream" and mobile_session_cancelled()):
             sequence, frame = await asyncio.to_thread(capture.latest, sequence, 1.0)
             if frame is None:
                 continue
+            if source_type == "mobile_stream":
+                report_frame_received()
             annotated, gesture = await asyncio.to_thread(session.process, frame)
             height, width = annotated.shape[:2]
             if width > 1280:
@@ -174,17 +197,24 @@ async def api_optimized_camera_live(ws: WebSocket):
                 }
             )
         if capture.error:
+            if source_type == "mobile_stream":
+                report_stream_error(capture.error)
             await ws.send_json({"type": "error", "message": capture.error})
     except WebSocketDisconnect:
         pass
     except Exception as exc:
+        if source_type == "mobile_stream":
+            report_stream_error("手机实时识别异常")
         try:
-            await ws.send_json({"type": "error", "message": str(exc)})
+            message = "无法打开或处理手机视频源" if source_type == "mobile_stream" else str(exc)
+            await ws.send_json({"type": "error", "message": message})
         except Exception:
             pass
     finally:
         if capture is not None:
             await asyncio.to_thread(capture.stop)
+        if mobile_session_acquired:
+            release_mobile_session()
 
 
 @router.post("/start")

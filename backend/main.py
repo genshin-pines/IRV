@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"       # 抑制 FFmpeg h264 解码噪音
+# RTSP over TCP avoids Wi-Fi packet loss; FFmpeg keeps only current frames for live previews.
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;0")
 
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,7 +25,7 @@ from alert_agent.scheduler import agent_status, start_scheduler, stop_scheduler
 from backend.config import EVENT_BUS_WINDOW_SECONDS, FUSION_DEDUP_MS, FUSION_LLM_ENABLED
 from backend.database import init_db
 from backend.middleware.logging_mw import RequestLoggingMiddleware
-from backend.routers import alerts_router, auth_router, cameras_router, gesture_router, music_router, plate_router, preferences_router, traffic_police_router, ws_manager
+from backend.routers import alerts_router, auth_router, cameras_router, gesture_router, mobile_camera_router, music_router, plate_router, preferences_router, traffic_police_router, ws_manager
 from backend.services.log_service import setup_log_collector
 
 FRONTEND_DIR = PROJECT_DIR / "frontend"
@@ -96,6 +98,7 @@ app.include_router(preferences_router)
 app.include_router(auth_router)
 app.include_router(plate_router)
 app.include_router(gesture_router)
+app.include_router(mobile_camera_router)
 app.include_router(traffic_police_router)
 app.include_router(cameras_router)
 
