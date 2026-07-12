@@ -1,9 +1,15 @@
 ﻿from __future__ import annotations
 
+import asyncio
+import base64
+import queue
+import threading
+import time
 from datetime import datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+import cv2
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 from backend.services.plate_service import (
@@ -12,6 +18,7 @@ from backend.services.plate_service import (
     recognize_stream,
     recognize_video_bytes,
 )
+from backend.services.local_video_service import LocalVideoManager, delete_video, resolve_video, save_upload, warmup_models
 
 router = APIRouter(prefix="/api/plate", tags=["plate"])
 
@@ -44,6 +51,90 @@ async def api_recognize_video(file: UploadFile = File(...), interval: float = Qu
         return response(data)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/local-video")
+async def api_upload_local_video(file: UploadFile = File(...)):
+    try:
+        return response(await save_upload(file), message="本地视频已就绪")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.websocket("/local-video/live")
+async def api_local_video_live(ws: WebSocket):
+    await ws.accept()
+    manager = LocalVideoManager()
+    frame_queue: queue.Queue = queue.Queue(maxsize=5)
+    stop_event = threading.Event()
+    video_id = ""
+
+    def reader() -> None:
+        while not stop_event.is_set() and manager.running:
+            frame, plates, inference_ms = manager.read_frame()
+            if frame is None:
+                break
+            ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if ok:
+                payload = {
+                    "type": "frame",
+                    "frame": base64.b64encode(jpeg).decode("ascii"),
+                    "plates": plates,
+                    "inference_ms": inference_ms,
+                }
+                if frame_queue.full():
+                    try:
+                        frame_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                frame_queue.put_nowait(payload)
+            time.sleep(0.03)
+
+    try:
+        message = await ws.receive_json()
+        video_id = str(message.get("video_id", ""))
+        path = resolve_video(video_id)
+        if path is None:
+            await ws.send_json({"type": "error", "message": "本地视频不存在或已失效"})
+            return
+        await asyncio.to_thread(warmup_models)
+        if not manager.open(path):
+            await ws.send_json({"type": "error", "message": "无法打开本地视频"})
+            return
+
+        await ws.send_json({"type": "status", "connected": True})
+        thread = threading.Thread(target=reader, daemon=True)
+        thread.start()
+        published_codes: set[str] = set()
+        while manager.running or not frame_queue.empty():
+            try:
+                payload = frame_queue.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.02)
+                continue
+            await ws.send_json(payload)
+            new_plates = []
+            for plate in payload["plates"]:
+                code = plate.get("code", "")
+                if code and code != "???" and code not in published_codes:
+                    published_codes.add(code)
+                    new_plates.append(
+                        {
+                            "plate_code": code,
+                            "confidence": plate.get("conf", 0.0),
+                            "plate_color": plate.get("color", "未知"),
+                            "plate_type": -1,
+                            "bbox": plate.get("bbox", []),
+                        }
+                    )
+            await publish_plate_events(new_plates, camera_id=f"local:{path.name}")
+        await ws.send_json({"type": "ended"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        stop_event.set()
+        manager.close()
+        delete_video(video_id)
 
 
 @router.post("/recognize-stream")

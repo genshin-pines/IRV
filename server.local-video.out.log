@@ -1,0 +1,2 @@
+INFO:     127.0.0.1:65377 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58404 - "POST /api/traffic-police/optimized-video HTTP/1.1" 200 OK

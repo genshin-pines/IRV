@@ -22,9 +22,11 @@ _gesture_control_enabled = False
 _last_control_toggle_at = 0.0
 _last_turn_action = ""
 _last_turn_action_at = 0.0
+_last_volume_action_at = 0.0
 CONTROL_TOGGLE_SUPPRESS_SEC = 1.5
 TURN_ACTION_SUPPRESS_SEC = 1.0
 TURN_REVERSE_SUPPRESS_SEC = 1.5
+VOLUME_TO_MUSIC_SUPPRESS_SEC = 2.0
 
 
 def ensure_vendor_path() -> None:
@@ -151,7 +153,7 @@ def recognize_frame_bytes(contents: bytes, filename: str = "frame") -> dict[str,
 
 
 def map_event_to_vehicle(event: dict[str, Any]) -> dict[str, Any]:
-    global _gesture_control_enabled, _last_control_toggle_at, _last_turn_action, _last_turn_action_at
+    global _gesture_control_enabled, _last_control_toggle_at, _last_turn_action, _last_turn_action_at, _last_volume_action_at
 
     gesture_type = str(event.get("gesture_type") or event.get("gesture_action") or "").upper()
     mapping = {
@@ -195,6 +197,11 @@ def map_event_to_vehicle(event: dict[str, Any]) -> dict[str, Any]:
     elif action not in {"phone_answer", "phone_hangup"} and not _gesture_control_enabled:
         action_applied = False
         suppress_reason = "gesture control disabled"
+    elif action == "music_toggle" and time.time() - _last_volume_action_at < VOLUME_TO_MUSIC_SUPPRESS_SEC:
+        action_applied = False
+        suppress_reason = f"ignore music toggle within {VOLUME_TO_MUSIC_SUPPRESS_SEC:.1f}s after volume action"
+    elif action in {"volume_up", "volume_down"}:
+        _last_volume_action_at = time.time()
     elif action in {"left", "right"}:
         now = time.time()
         elapsed = now - _last_turn_action_at

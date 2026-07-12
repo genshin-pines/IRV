@@ -58,5 +58,5 @@ FEISHU_CHAT_ID = os.getenv("FEISHU_CHAT_ID", "")
 # ── 交警手势识别 ──────────────────────────────────────
 CTPGR_REFERENCE_DIR = os.getenv(
     "CTPGR_REFERENCE_DIR",
-    str(PROJECT_DIR.parent / "参考库" / "ctpgr-publish"),
+    str(PROJECT_DIR.parent.parent / "参考库" / "TPHSR" / "ctpgr-publish"),
 )

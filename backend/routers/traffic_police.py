@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import logging
 from datetime import datetime
 from uuid import uuid4
 
 import cv2
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.services.camera_service import get_camera
 from backend.services.log_service import write_log
+from backend.services.optimized_traffic_service import (
+    create_capture as create_optimized_capture,
+    create_session as create_optimized_session,
+    get_runtime as get_optimized_runtime,
+    is_available as optimized_available,
+    resolve_upload as resolve_optimized_upload,
+    save_upload as save_optimized_upload,
+)
 from backend.services.traffic_police_service import (
     drain_messages,
     latest_frame,
@@ -23,6 +33,7 @@ from backend.services.traffic_police_service import (
 
 
 router = APIRouter(prefix="/api/traffic-police", tags=["traffic-police"])
+logger = logging.getLogger(__name__)
 
 
 def response(data=None, message: str = "success", ok: bool = True) -> dict:
@@ -41,7 +52,139 @@ class DriverAssistAnalyzeRequest(BaseModel):
 
 @router.get("/status")
 def api_status():
-    return response(traffic_status())
+    data = traffic_status()
+    available, reason = optimized_available()
+    data["optimized"] = {"available": available, "reason": reason, "model": "BiLSTM multi-video"}
+    return response(data)
+
+
+@router.post("/optimized-video")
+async def api_optimized_video(file: UploadFile = File(...)):
+    try:
+        return response(await save_optimized_upload(file), message="优化交警视频已就绪")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.websocket("/optimized-live")
+async def api_optimized_live(ws: WebSocket):
+    await ws.accept()
+    source = None
+    cap = None
+    try:
+        request = await ws.receive_json()
+        source = resolve_optimized_upload(str(request.get("video_id", "")))
+        if source is None:
+            await ws.send_json({"type": "error", "message": "本地视频不存在或已失效"})
+            return
+        await ws.send_json({"type": "status", "message": "正在加载优化 BiLSTM 模型"})
+        runtime = await get_optimized_runtime()
+        session = create_optimized_session(runtime)
+        cap = cv2.VideoCapture(str(source))
+        if not cap.isOpened():
+            await ws.send_json({"type": "error", "message": "无法打开本地视频"})
+            return
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 15.0)
+        frame_duration = 1.0 / max(source_fps, 1.0)
+        next_frame_at = asyncio.get_running_loop().time()
+        frame_index = 0
+        await ws.send_json({"type": "status", "message": "优化交警手势实时识别已启动"})
+        while True:
+            ok, frame = await asyncio.to_thread(cap.read)
+            if not ok or frame is None:
+                break
+            annotated, gesture = await asyncio.to_thread(session.process, frame)
+            height, width = annotated.shape[:2]
+            if width > 1280:
+                scale = 1280 / width
+                annotated = cv2.resize(annotated, (1280, max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
+            encoded, jpeg = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 82])
+            if not encoded:
+                continue
+            frame_index += 1
+            await ws.send_json(
+                {
+                    "type": "frame",
+                    "frame": base64.b64encode(jpeg).decode("ascii"),
+                    "gesture": gesture,
+                    "frame_index": frame_index,
+                    "total_frames": total_frames,
+                    "progress": round(frame_index / max(total_frames, 1), 4),
+                }
+            )
+            next_frame_at += frame_duration
+            await asyncio.sleep(max(0.0, next_frame_at - asyncio.get_running_loop().time()))
+        await ws.send_json({"type": "ended", "frames": frame_index})
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.exception("optimized traffic video stream failed")
+        try:
+            await ws.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
+    finally:
+        if cap is not None:
+            cap.release()
+        if source is not None:
+            source.unlink(missing_ok=True)
+
+
+@router.websocket("/optimized-camera-live")
+async def api_optimized_camera_live(ws: WebSocket):
+    await ws.accept()
+    capture = None
+    try:
+        request = await ws.receive_json()
+        await ws.send_json({"type": "status", "message": "正在加载优化 BiLSTM 模型"})
+        runtime = await get_optimized_runtime()
+        session = create_optimized_session(runtime)
+        capture = create_optimized_capture(
+            camera_index=int(request.get("camera_index", 0)),
+            source_url=request.get("source_url") or None,
+        )
+        await asyncio.to_thread(capture.start)
+        await ws.send_json({"type": "status", "message": "优化交警手势摄像头识别已启动"})
+        sequence = 0
+        processed = 0
+        started = asyncio.get_running_loop().time()
+        while capture.running:
+            sequence, frame = await asyncio.to_thread(capture.latest, sequence, 1.0)
+            if frame is None:
+                continue
+            annotated, gesture = await asyncio.to_thread(session.process, frame)
+            height, width = annotated.shape[:2]
+            if width > 1280:
+                scale = 1280 / width
+                annotated = cv2.resize(annotated, (1280, max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
+            encoded, jpeg = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 82])
+            if not encoded:
+                continue
+            processed += 1
+            elapsed = max(asyncio.get_running_loop().time() - started, 1e-3)
+            await ws.send_json(
+                {
+                    "type": "frame",
+                    "frame": base64.b64encode(jpeg).decode("ascii"),
+                    "gesture": gesture,
+                    "frame_index": processed,
+                    "processing_fps": round(processed / elapsed, 1),
+                    "dropped_frames": max(0, sequence - processed),
+                }
+            )
+        if capture.error:
+            await ws.send_json({"type": "error", "message": capture.error})
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        try:
+            await ws.send_json({"type": "error", "message": str(exc)})
+        except Exception:
+            pass
+    finally:
+        if capture is not None:
+            await asyncio.to_thread(capture.stop)
 
 
 @router.post("/start")

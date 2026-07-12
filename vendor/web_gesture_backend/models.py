@@ -131,6 +131,7 @@ VOLUME_REVERSE_SUPPRESS_SEC = 2.0
 TURN_ACTION_SUPPRESS_SEC = 1.0
 TURN_REVERSE_SUPPRESS_SEC = 1.5
 MUSIC_TOGGLE_SUPPRESS_SEC = 1.0
+VOLUME_TO_MUSIC_SUPPRESS_SEC = 2.0
 CONTROL_TOGGLE_SUPPRESS_SEC = 1.5
 _last_volume_action: VehicleAction | None = None
 _last_volume_action_at = 0.0
@@ -161,6 +162,9 @@ def _action_gate(vehicle: VehicleAction, now: float) -> tuple[bool, str]:
         return False, "gesture control disabled"
 
     if vehicle == VehicleAction.MUSIC_TOGGLE:
+        volume_elapsed = now - _last_volume_action_at
+        if volume_elapsed < VOLUME_TO_MUSIC_SUPPRESS_SEC:
+            return False, f"ignore music toggle within {VOLUME_TO_MUSIC_SUPPRESS_SEC:.1f}s after volume action"
         elapsed = now - _last_music_toggle_at
         if elapsed < MUSIC_TOGGLE_SUPPRESS_SEC:
             return False, f"ignore repeated music toggle within {MUSIC_TOGGLE_SUPPRESS_SEC:.1f}s"
