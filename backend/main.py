@@ -23,7 +23,7 @@ from alert_agent.scheduler import agent_status, start_scheduler, stop_scheduler
 from backend.config import EVENT_BUS_WINDOW_SECONDS, FUSION_DEDUP_MS, FUSION_LLM_ENABLED
 from backend.database import init_db
 from backend.middleware.logging_mw import RequestLoggingMiddleware
-from backend.routers import alerts_router, auth_router, cameras_router, gesture_router, music_router, plate_router, preferences_router, traffic_police_router, ws_manager
+from backend.routers import alerts_router, auth_router, cameras_router, custom_gestures_router, gesture_router, music_router, plate_router, preferences_router, traffic_police_router, ws_manager
 from backend.services.log_service import setup_log_collector
 
 FRONTEND_DIR = PROJECT_DIR / "frontend"
@@ -94,6 +94,7 @@ app.include_router(alerts_router)
 app.include_router(music_router)
 app.include_router(preferences_router)
 app.include_router(auth_router)
+app.include_router(custom_gestures_router)
 app.include_router(plate_router)
 app.include_router(gesture_router)
 app.include_router(traffic_police_router)
@@ -109,6 +110,14 @@ def index():
     if index_file.exists():
         return HTMLResponse(index_file.read_text(encoding="utf-8"))
     return HTMLResponse("<h1>IRV Backend</h1><p>Open <a href='/docs'>/docs</a></p>")
+
+
+@app.get("/gesture-settings", response_class=HTMLResponse)
+def gesture_settings():
+    settings_file = FRONTEND_DIR / "gesture-settings.html"
+    if settings_file.exists():
+        return HTMLResponse(settings_file.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Gesture settings page is unavailable</h1>", status_code=404)
 
 
 @app.get("/api/health")

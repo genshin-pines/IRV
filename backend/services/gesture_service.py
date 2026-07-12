@@ -79,16 +79,16 @@ def _set_last_action(data: dict[str, Any]) -> None:
     _last_action_message = data
 
 
-def start_gesture_stream(src_url: str | None = None, use_webcam: bool = False, camera_index: int = 0, mirror: bool = False) -> dict[str, Any]:
+def start_gesture_stream(src_url: str | None = None, use_webcam: bool = False, camera_index: int = 0, mirror: bool = False, user_id: int | None = None) -> dict[str, Any]:
     global _manager
     StreamManager = get_stream_manager_class()
     if _manager and _manager.is_running:
         _manager.stop()
-    _manager = StreamManager(src_url=src_url, use_webcam=use_webcam, camera_index=camera_index, mirror=mirror)
+    _manager = StreamManager(src_url=src_url, use_webcam=use_webcam, camera_index=camera_index, mirror=mirror, user_id=user_id)
     _manager.start()
     if not _manager.is_running:
         raise RuntimeError(_manager.error or "无法启动手势视频流")
-    logger.info("gesture stream started: webcam=%s camera_index=%s mirror=%s src=%s", use_webcam, camera_index, mirror, src_url)
+    logger.info("gesture stream started: user_id=%s webcam=%s camera_index=%s mirror=%s src=%s", user_id, use_webcam, camera_index, mirror, src_url)
     return gesture_status()
 
 
@@ -117,6 +117,15 @@ def latest_frame():
     if not _manager or not _manager.is_running:
         return None
     return _manager.get_latest_frame()
+
+
+def latest_recognition(user_id: int | None = None) -> dict[str, Any] | None:
+    """Read the current stream's recognition result without consuming its message queue."""
+    if not _manager or not _manager.is_running:
+        return None
+    if user_id is not None and _manager.user_id != user_id:
+        raise PermissionError("当前手势摄像头不属于该车主")
+    return _manager.get_latest_frame_message()
 
 
 def drain_messages(limit: int = 20) -> list[dict[str, Any]]:

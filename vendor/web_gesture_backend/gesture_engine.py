@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from dgcore.main_controller import MainController
 from dgcore.utils import targets, Event, Drawer
 
-from models import HandInfo, FrameMessage, make_action_message, to_dict
+from models import HandInfo, FrameMessage, make_action_message, make_custom_action_message, to_dict
 
 
 class GestureEngine:
@@ -30,6 +30,7 @@ class GestureEngine:
 
         self.on_action = None
         self.on_frame = None
+        self.custom_action_resolver = None
         self._last_time = time.time()
         self._fps = 0.0
         self.drawer = Drawer()
@@ -41,6 +42,9 @@ class GestureEngine:
         self._static_action_candidate_count = 0
         self._static_action_min_frames = 8
         self._static_action_max_move = 35.0
+        self._custom_static_candidate = None
+        self._custom_static_candidate_center = None
+        self._custom_static_candidate_count = 0
 
     def _init_trace(self, reset_trace=False):
         try:
@@ -124,6 +128,25 @@ class GestureEngine:
                 )
             if msg and self.on_action:
                 self.on_action(to_dict(msg))
+
+        custom_gesture = self._custom_static_gesture(hands)
+        if custom_gesture and self.custom_action_resolver:
+            try:
+                binding = self.custom_action_resolver(custom_gesture)
+            except Exception as exc:
+                print(f"[GestureEngine] custom gesture lookup failed: {exc}")
+                binding = None
+            if binding:
+                msg = make_custom_action_message(
+                    binding["gesture_key"], binding["action_code"], binding["display_name"],
+                )
+                self._trace_action(now, f"CUSTOM:{custom_gesture}", msg)
+                if msg and msg.action_applied:
+                    self.drawer.set_feedback(
+                        msg.vehicle_action, msg.vehicle_label, control_enabled=msg.gesture_control_enabled,
+                    )
+                if msg and self.on_action:
+                    self.on_action(to_dict(msg))
 
         count_of_zoom = 0
         thumb_boxes = []
@@ -212,3 +235,33 @@ class GestureEngine:
         self._last_static_action = action
         self._last_static_action_at = now
         return action
+
+    def _custom_static_gesture(self, hands):
+        """Stabilize arbitrary static labels before consulting owner-specific bindings."""
+        if len(hands) != 1 or hands[0].gesture == "unknown":
+            self._custom_static_candidate = None
+            self._custom_static_candidate_center = None
+            self._custom_static_candidate_count = 0
+            return None
+
+        gesture = hands[0].gesture
+        center = hands[0].center
+        if gesture != self._custom_static_candidate or self._custom_static_candidate_center is None:
+            self._custom_static_candidate = gesture
+            self._custom_static_candidate_center = center
+            self._custom_static_candidate_count = 1
+            return None
+
+        dx = center[0] - self._custom_static_candidate_center[0]
+        dy = center[1] - self._custom_static_candidate_center[1]
+        if (dx * dx + dy * dy) ** 0.5 > self._static_action_max_move:
+            self._custom_static_candidate_center = center
+            self._custom_static_candidate_count = 1
+            return None
+
+        self._custom_static_candidate_count += 1
+        self._custom_static_candidate_center = center
+        if self._custom_static_candidate_count < self._static_action_min_frames:
+            return None
+        # The resolver adds a per-binding cooldown, so a held hand cannot repeat actions.
+        return gesture

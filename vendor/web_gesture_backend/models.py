@@ -127,6 +127,29 @@ def make_action_message(gesture_event_name: str, hand_id: int = -1) -> Optional[
     )
 
 
+def make_custom_action_message(gesture_key: str, vehicle_action: str, display_name: str, hand_id: int = -1) -> Optional[ActionMessage]:
+    """Build a normal vehicle action message for a user-owned static gesture."""
+    try:
+        vehicle = VehicleAction(vehicle_action)
+    except ValueError:
+        return None
+    import time
+
+    now = time.time()
+    action_applied, suppress_reason = _action_gate(vehicle, now)
+    return ActionMessage(
+        type="action",
+        timestamp=now,
+        gesture_action=f"CUSTOM:{gesture_key}",
+        vehicle_action=vehicle.value,
+        vehicle_label=display_name or VEHICLE_LABELS.get(vehicle.value, vehicle.value),
+        hand_id=hand_id,
+        action_applied=action_applied,
+        suppress_reason=suppress_reason,
+        gesture_control_enabled=_gesture_control_enabled,
+    )
+
+
 VOLUME_REVERSE_SUPPRESS_SEC = 2.0
 TURN_ACTION_SUPPRESS_SEC = 1.0
 TURN_REVERSE_SUPPRESS_SEC = 1.5

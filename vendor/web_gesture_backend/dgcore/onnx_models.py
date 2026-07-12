@@ -186,9 +186,18 @@ class HandClassification(OnnxModel):
         predictions : np.ndarray
             Predictions from model
         """
+        labels, _ = self.predict(image, bboxes)
+        return labels
+
+    def predict(self, image, bboxes):
+        """Return classifier labels and softmax confidence for capture validation."""
         crops = self.get_crops(image, bboxes)
         crops = [self.preprocess(crop) for crop in crops]
         input_name = self.sess.get_inputs()[0].name
         outputs = self.sess.run(None, {input_name: np.concatenate(crops, axis=0)})[0]
         labels = np.argmax(outputs, axis=1)
-        return labels
+        shifted = outputs - np.max(outputs, axis=1, keepdims=True)
+        probabilities = np.exp(shifted)
+        probabilities /= np.sum(probabilities, axis=1, keepdims=True)
+        confidence = probabilities[np.arange(len(labels)), labels]
+        return labels, confidence

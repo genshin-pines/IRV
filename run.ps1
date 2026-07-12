@@ -1,37 +1,34 @@
 param(
-  [int]$Port = 8000
+  [int]$Port = 8000,
+  [switch]$Install,
+  [switch]$Foreground
 )
 
 $ErrorActionPreference = "Stop"
-
 Set-Location $PSScriptRoot
 
-Write-Host "[IRV] Working directory: $PSScriptRoot"
+function Get-IrvPython {
+  $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+  if (Test-Path -LiteralPath $venvPython) {
+    return $venvPython
+  }
 
-if (!(Test-Path ".\.venv\Scripts\python.exe")) {
-  Write-Host "[IRV] Creating virtual environment..."
-  python -m venv .venv
-}
+  $candidates = @(
+    $env:IRV_PYTHON,
+    "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python313\python.exe",
+    "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python312\python.exe",
+    "C:\Python313\python.exe",
+    "C:\Python312\python.exe"
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+  if ($candidates.Count -gt 0) {
+    return $candidates[0]
+  }
 
-Write-Host "[IRV] Upgrading pip..."
-& ".\.venv\Scripts\python.exe" -m pip install --upgrade pip
-
-Write-Host "[IRV] Installing requirements..."
-& ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
-
-# hyperlpr3 may pull in the CPU onnxruntime package and overwrite DirectML's
-# shared module. Repair that conflict only when the GPU provider is missing.
-$onnxProviders = & ".\.venv\Scripts\python.exe" -c "import onnxruntime as ort; print(','.join(ort.get_available_providers()))"
-if ($onnxProviders -notmatch "DmlExecutionProvider") {
-  Write-Host "[IRV] Repairing ONNX Runtime DirectML provider..."
-  & ".\.venv\Scripts\python.exe" -m pip uninstall -y onnxruntime
-  & ".\.venv\Scripts\python.exe" -m pip install --force-reinstall --no-deps onnxruntime-directml==1.24.4
-}
-
-$torchCudaReady = & ".\.venv\Scripts\python.exe" -c "import torch; print('yes' if torch.cuda.is_available() else 'no')"
-if ((Get-Command nvidia-smi -ErrorAction SilentlyContinue) -and $torchCudaReady -ne "yes") {
-  Write-Host "[IRV] Installing CUDA 12.6 PyTorch for traffic gesture recognition..."
-  & ".\.venv\Scripts\python.exe" -m pip install --force-reinstall --no-deps torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126
+  $command = Get-Command python -ErrorAction SilentlyContinue
+  if ($command) {
+    return $command.Source
+  }
+  throw "Python not found. Set IRV_PYTHON or install Python 3.10+."
 }
 
 function Test-IrvHealth {
@@ -44,17 +41,59 @@ function Test-IrvHealth {
   }
 }
 
+$venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+if (!(Test-Path -LiteralPath $venvPython)) {
+  $basePython = Get-IrvPython
+  Write-Host "[IRV] Creating virtual environment with $basePython"
+  & $basePython -m venv .venv
+}
+
+$python = Get-IrvPython
+Write-Host "[IRV] Python: $(& $python -V)"
+
+if ($Install) {
+  Write-Host "[IRV] Installing project dependencies..."
+  & $python -m pip install -r requirements.txt
+}
+
 if (Test-IrvHealth -CheckPort $Port) {
   Write-Host "[IRV] Backend is already running: http://127.0.0.1:$Port"
-  Write-Host "[IRV] Swagger:                    http://127.0.0.1:$Port/docs"
+  Write-Host "[IRV] Gesture settings:             http://127.0.0.1:$Port/gesture-settings"
   exit 0
 }
 
-while (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $Port -ErrorAction SilentlyContinue) {
-  Write-Host "[IRV] Port $Port is busy; trying $($Port + 1)..."
-  $Port += 1
+if (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $Port -ErrorAction SilentlyContinue) {
+  throw "Port $Port is occupied. Use .\run.ps1 -Port <port> or stop the process using it."
 }
 
-Write-Host "[IRV] Starting backend: http://127.0.0.1:$Port"
-Write-Host "[IRV] Swagger:          http://127.0.0.1:$Port/docs"
-& ".\.venv\Scripts\python.exe" -m uvicorn backend.main:app --host 127.0.0.1 --port $Port --reload
+$arguments = @("-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "$Port")
+if ($Foreground) {
+  Write-Host "[IRV] Starting foreground server: http://127.0.0.1:$Port"
+  & $python @arguments
+  exit $LASTEXITCODE
+}
+
+$logDir = Join-Path $PSScriptRoot "logs"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$stdout = Join-Path $logDir "server-$stamp.out.log"
+$stderr = Join-Path $logDir "server-$stamp.err.log"
+$process = Start-Process -FilePath $python -ArgumentList $arguments -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+
+for ($attempt = 0; $attempt -lt 20; $attempt++) {
+  Start-Sleep -Milliseconds 500
+  if (Test-IrvHealth -CheckPort $Port) {
+    Write-Host "[IRV] Started (PID $($process.Id)): http://127.0.0.1:$Port"
+    Write-Host "[IRV] Gesture settings:          http://127.0.0.1:$Port/gesture-settings"
+    Write-Host "[IRV] Logs: $stdout"
+    exit 0
+  }
+  if ($process.HasExited) {
+    break
+  }
+}
+
+if (Test-Path -LiteralPath $stderr) {
+  Get-Content -LiteralPath $stderr -Tail 40
+}
+throw "IRV did not become healthy. Check $stderr"
