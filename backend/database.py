@@ -18,6 +18,7 @@ class Base(DeclarativeBase):
 def init_db() -> None:
     from backend.models.alert_event import AlertEvent  # noqa: F401
     from backend.models.auth_user import AuthCode, AuthUser  # noqa: F401
+    from backend.models.custom_gesture_binding import CustomGestureBinding  # noqa: F401
     from backend.models.music_track import MusicTrack  # noqa: F401
     from backend.models.user_preference import UserPreference  # noqa: F401
 

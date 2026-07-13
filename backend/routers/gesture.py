@@ -5,7 +5,7 @@ from datetime import datetime
 from uuid import uuid4
 
 import cv2
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,8 @@ from backend.services.gesture_service import (
     stop_gesture_stream,
 )
 from backend.services.log_service import write_log
+from backend.models.auth_user import AuthUser
+from backend.routers.custom_gestures import get_authenticated_driver
 
 router = APIRouter(prefix="/api/gesture", tags=["gesture"])
 
@@ -44,9 +46,9 @@ class GestureEvent(BaseModel):
 
 
 @router.post("/start")
-def api_start(payload: GestureStartRequest):
+def api_start(payload: GestureStartRequest, user: AuthUser = Depends(get_authenticated_driver)):
     try:
-        return response(start_gesture_stream(src_url=payload.src_url, use_webcam=payload.use_webcam, camera_index=payload.camera_index, mirror=payload.mirror))
+        return response(start_gesture_stream(src_url=payload.src_url, use_webcam=payload.use_webcam, camera_index=payload.camera_index, mirror=payload.mirror, user_id=user.id))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

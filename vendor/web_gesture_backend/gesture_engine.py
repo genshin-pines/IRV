@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from dgcore.main_controller import MainController
 from dgcore.utils import targets, Event, Drawer
 
-from models import HandInfo, FrameMessage, make_action_message, to_dict
+from models import HandInfo, FrameMessage, make_action_message, make_custom_action_message, to_dict
 
 
 class GestureEngine:
@@ -30,6 +30,7 @@ class GestureEngine:
 
         self.on_action = None
         self.on_frame = None
+        self.custom_action_resolver = None
         self._last_time = time.time()
         self._fps = 0.0
         self.drawer = Drawer()
@@ -41,6 +42,12 @@ class GestureEngine:
         self._static_action_candidate_count = 0
         self._static_action_min_frames = 8
         self._static_action_max_move = 35.0
+        self._vertical_alias_states = {}
+        self._vertical_alias_min_frames = 5
+        self._vertical_alias_max_frames = 30
+        self._custom_static_candidate = None
+        self._custom_static_candidate_center = None
+        self._custom_static_candidate_count = 0
 
     def _init_trace(self, reset_trace=False):
         try:
@@ -112,6 +119,18 @@ class GestureEngine:
         if self.on_frame:
             self.on_frame(to_dict(FrameMessage(timestamp=now, fps=round(self._fps, 1), hands=hands)))
 
+        for event_name, hand_id in self._business_vertical_alias_actions(hands):
+            msg = make_action_message(event_name, hand_id=hand_id)
+            self._trace_action(now, event_name, msg)
+            if msg and msg.action_applied:
+                self.drawer.set_feedback(
+                    msg.vehicle_action,
+                    msg.vehicle_label,
+                    control_enabled=msg.gesture_control_enabled,
+                )
+            if msg and self.on_action:
+                self.on_action(to_dict(msg))
+
         static_action = self._static_action(hands)
         if static_action:
             msg = make_action_message(static_action)
@@ -124,6 +143,25 @@ class GestureEngine:
                 )
             if msg and self.on_action:
                 self.on_action(to_dict(msg))
+
+        custom_gesture = self._custom_static_gesture(hands)
+        if custom_gesture and self.custom_action_resolver:
+            try:
+                binding = self.custom_action_resolver(custom_gesture)
+            except Exception as exc:
+                print(f"[GestureEngine] custom gesture lookup failed: {exc}")
+                binding = None
+            if binding:
+                msg = make_custom_action_message(
+                    binding["gesture_key"], binding["action_code"], binding["display_name"],
+                )
+                self._trace_action(now, f"CUSTOM:{custom_gesture}", msg)
+                if msg and msg.action_applied:
+                    self.drawer.set_feedback(
+                        msg.vehicle_action, msg.vehicle_label, control_enabled=msg.gesture_control_enabled,
+                    )
+                if msg and self.on_action:
+                    self.on_action(to_dict(msg))
 
         count_of_zoom = 0
         thumb_boxes = []
@@ -164,6 +202,50 @@ class GestureEngine:
         annotated = self.drawer.draw(annotated)
         return annotated
 
+    def _business_vertical_alias_actions(self, hands):
+        """Complete the point/one alias groups for vertical-swipe business events."""
+        point_aliases = {"point", "fist", "fist_inverted"}
+        one_aliases = {"one", "mute", "little_finger", "thumb_index"}
+        events = []
+        active_ids = set()
+        for hand in hands:
+            hand_id = hand.hand_id
+            active_ids.add(hand_id)
+            if hand.gesture in point_aliases:
+                kind = "point_group"
+            elif hand.gesture in one_aliases:
+                kind = "one_group"
+            else:
+                continue
+
+            previous = self._vertical_alias_states.get(hand_id)
+            if previous is None:
+                self._vertical_alias_states[hand_id] = (kind, self._frame_index, hand.gesture)
+                continue
+
+            previous_kind, start_frame, previous_gesture = previous
+            if previous_kind == kind:
+                continue
+
+            duration = self._frame_index - start_frame
+            if self._vertical_alias_min_frames <= duration <= self._vertical_alias_max_frames:
+                # Native point/one transitions are already emitted by the original
+                # controller. This adapter fills only business-layer aliases.
+                business_aliases = {"fist", "fist_inverted", "thumb_index"}
+                contains_business_alias = previous_gesture in business_aliases or hand.gesture in business_aliases
+                if contains_business_alias:
+                    event_name = "FAST_SWIPE_UP" if previous_kind == "point_group" else "FAST_SWIPE_DOWN"
+                    events.append((event_name, hand_id))
+                self._vertical_alias_states.pop(hand_id, None)
+            else:
+                self._vertical_alias_states[hand_id] = (kind, self._frame_index, hand.gesture)
+
+        expired_before = self._frame_index - self._vertical_alias_max_frames
+        for hand_id, (_kind, start_frame, _gesture) in list(self._vertical_alias_states.items()):
+            if start_frame < expired_before or hand_id not in active_ids:
+                self._vertical_alias_states.pop(hand_id, None)
+        return events
+
     def _static_action(self, hands):
         action = None
         center = None
@@ -179,6 +261,9 @@ class GestureEngine:
         elif any(hand.gesture in {"stop", "stop_inverted"} for hand in hands):
             action = "STOP"
             center = next(hand.center for hand in hands if hand.gesture in {"stop", "stop_inverted"})
+        elif any(hand.gesture == "ok" for hand in hands):
+            action = "OK"
+            center = next(hand.center for hand in hands if hand.gesture == "ok")
 
         if not action:
             self._static_action_candidate = None
@@ -201,7 +286,8 @@ class GestureEngine:
 
         self._static_action_candidate_count += 1
         self._static_action_candidate_center = center
-        if self._static_action_candidate_count < self._static_action_min_frames:
+        required_frames = 2 if action == "OK" else self._static_action_min_frames
+        if self._static_action_candidate_count < required_frames:
             return None
 
         now = time.time()
@@ -212,3 +298,31 @@ class GestureEngine:
         self._last_static_action = action
         self._last_static_action_at = now
         return action
+
+    def _custom_static_gesture(self, hands):
+        if len(hands) != 1 or hands[0].gesture == "unknown":
+            self._custom_static_candidate = None
+            self._custom_static_candidate_center = None
+            self._custom_static_candidate_count = 0
+            return None
+
+        gesture = hands[0].gesture
+        center = hands[0].center
+        if gesture != self._custom_static_candidate or self._custom_static_candidate_center is None:
+            self._custom_static_candidate = gesture
+            self._custom_static_candidate_center = center
+            self._custom_static_candidate_count = 1
+            return None
+
+        dx = center[0] - self._custom_static_candidate_center[0]
+        dy = center[1] - self._custom_static_candidate_center[1]
+        if (dx * dx + dy * dy) ** 0.5 > self._static_action_max_move:
+            self._custom_static_candidate_center = center
+            self._custom_static_candidate_count = 1
+            return None
+
+        self._custom_static_candidate_count += 1
+        self._custom_static_candidate_center = center
+        if self._custom_static_candidate_count < self._static_action_min_frames:
+            return None
+        return gesture

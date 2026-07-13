@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import logging
 import queue
 import threading
 import time
@@ -21,6 +22,7 @@ from backend.services.plate_service import (
 from backend.services.local_video_service import LocalVideoManager, delete_video, resolve_video, save_upload, warmup_models
 
 router = APIRouter(prefix="/api/plate", tags=["plate"])
+logger = logging.getLogger(__name__)
 
 
 def response(data=None, message: str = "success", ok: bool = True) -> dict:
@@ -70,17 +72,22 @@ async def api_local_video_live(ws: WebSocket):
     video_id = ""
 
     def reader() -> None:
-        while not stop_event.is_set() and manager.running:
-            frame, plates, inference_ms = manager.read_frame()
-            if frame is None:
-                break
-            ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if ok:
+        try:
+            while not stop_event.is_set() and manager.running:
+                frame, plates, inference_ms = manager.read_frame()
+                if frame is None:
+                    break
+                ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
+                if not ok:
+                    continue
                 payload = {
                     "type": "frame",
                     "frame": base64.b64encode(jpeg).decode("ascii"),
                     "plates": plates,
                     "inference_ms": inference_ms,
+                    "frame_index": manager.frame_index,
+                    "total_frames": manager.total_frames,
+                    "progress": round(manager.frame_index / max(manager.total_frames, 1), 4),
                 }
                 if frame_queue.full():
                     try:
@@ -88,7 +95,11 @@ async def api_local_video_live(ws: WebSocket):
                     except queue.Empty:
                         pass
                 frame_queue.put_nowait(payload)
-            time.sleep(0.03)
+                time.sleep(max(0.001, 1.0 / max(manager.fps, 1.0)))
+        except Exception as exc:
+            manager.error = f"本地视频处理失败：{exc}"
+            manager.running = False
+            logger.exception("local video reader failed")
 
     try:
         message = await ws.receive_json()
@@ -97,12 +108,14 @@ async def api_local_video_live(ws: WebSocket):
         if path is None:
             await ws.send_json({"type": "error", "message": "本地视频不存在或已失效"})
             return
+        await ws.send_json({"type": "status", "stage": "warming", "message": "正在加载车辆与车牌识别模型"})
         await asyncio.to_thread(warmup_models)
+        await ws.send_json({"type": "status", "stage": "opening", "message": "模型已就绪，正在打开视频"})
         if not manager.open(path):
             await ws.send_json({"type": "error", "message": "无法打开本地视频"})
             return
 
-        await ws.send_json({"type": "status", "connected": True})
+        await ws.send_json({"type": "status", "stage": "running", "connected": True, "message": "视频识别已启动"})
         thread = threading.Thread(target=reader, daemon=True)
         thread.start()
         published_codes: set[str] = set()
@@ -128,9 +141,18 @@ async def api_local_video_live(ws: WebSocket):
                         }
                     )
             await publish_plate_events(new_plates, camera_id=f"local:{path.name}")
-        await ws.send_json({"type": "ended"})
+        if manager.error:
+            await ws.send_json({"type": "error", "message": manager.error})
+        else:
+            await ws.send_json({"type": "ended", "frames": manager.frame_index})
     except WebSocketDisconnect:
         pass
+    except Exception as exc:
+        logger.exception("local video websocket failed")
+        try:
+            await ws.send_json({"type": "error", "message": f"本地视频处理失败：{exc}"})
+        except Exception:
+            pass
     finally:
         stop_event.set()
         manager.close()
