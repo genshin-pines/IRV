@@ -119,7 +119,7 @@ async def api_optimized_live(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as exc:
-        logger.exception("optimized traffic video stream failed")
+        write_log("traffic_police", "ERROR", f"optimized traffic video stream failed: {exc}")
         try:
             await ws.send_json({"type": "error", "message": str(exc)})
         except Exception:
@@ -192,6 +192,7 @@ def api_start(payload: TrafficStartRequest):
     try:
         return response(start_stream(src_url=payload.src_url, use_webcam=payload.use_webcam))
     except Exception as exc:
+        write_log("traffic_police", "ERROR", f"traffic police stream start failed: {exc}")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -212,6 +213,7 @@ async def api_recognize_frame(file: UploadFile = File(...)):
         data["driver_advice"] = summarize_gesture_frame(data.get("frame"))
         return response(data)
     except Exception as exc:
+        write_log("traffic_police", "ERROR", f"traffic police recognize-frame failed: {exc}")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

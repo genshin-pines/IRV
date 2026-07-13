@@ -101,7 +101,7 @@ class VehiclePlateTracker:
         *,
         min_hits_for_ocr: int | None = None,
         ocr_cooldown: float | None = None,
-        stop_ocr_confidence: float = 0.95,
+        stop_ocr_confidence: float = 0.98,
     ):
         """只更新位置，不涉及 OCR。返回 (新track, 是否需要OCR) 列表。"""
         with self._lock:

@@ -8,6 +8,13 @@ from backend.services.camera_service import get_camera, list_cameras, mjpeg_gene
 router = APIRouter(prefix="/api/cameras", tags=["cameras"])
 
 
+@router.get("/health")
+def api_camera_health():
+    """摄像头连通性健康检查"""
+    from backend.services.camera_health_service import health_status
+    return {"ok": True, "data": health_status(), "message": "success"}
+
+
 @router.get("")
 def api_list_cameras():
     return {"ok": True, "data": list_cameras(), "message": "success"}

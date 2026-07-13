@@ -46,7 +46,7 @@ class PlateTrack:
 class PlateTrackStore:
     """Stores OCR candidates under externally supplied vehicle track ids."""
 
-    def __init__(self, *, min_confidence: float = 0.90):
+    def __init__(self, *, min_confidence: float = 0.98):
         self.min_confidence = min_confidence
         self.tracks: dict[int, PlateTrack] = {}
 

@@ -81,11 +81,14 @@ class AlertList(BaseModel):
 
 class AlertStats(BaseModel):
     today_count: int
+    total_count: int = 0
     unread_count: int
     error_count: int
     critical_count: int
     by_module: dict[str, int]
-    trend_4h: list[dict[str, Any]]
+    by_level: dict[str, int] = Field(default_factory=dict)
+    trend: list[dict[str, Any]]
+    trend_4h: list[dict[str, Any]] = Field(default_factory=list)  # 兼容旧字段
 
 
 class LogRead(BaseModel):

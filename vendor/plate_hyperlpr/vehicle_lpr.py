@@ -149,7 +149,7 @@ def is_valid_plate_code(code: str) -> bool:
 def filter_plate_results(
     results: list[dict],
     *,
-    min_confidence: float = 0.90,
+    min_confidence: float = 0.98,
 ) -> tuple[list[dict], list[dict]]:
     """Split recognized plates into final results and rejected candidates."""
     accepted = []
@@ -179,7 +179,7 @@ def recognize_with_vehicle_crops(
     vehicle_conf: float = 0.25,
     vehicle_imgsz: int = 640,
     crop_scale: float = 2.0,
-    min_plate_confidence: float = 0.90,
+    min_plate_confidence: float = 0.98,
     return_rejected: bool = False,
 ) -> tuple[list[dict], list[Region]] | tuple[list[dict], list[Region], list[dict]]:
     """

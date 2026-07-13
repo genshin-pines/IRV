@@ -11,7 +11,7 @@ from typing import Any, Callable
 from backend.config import LOG_FILE, LOG_LEVEL, LOG_COLLECTOR_CAPACITY
 
 
-LOG_SOURCES = {"plate", "gesture", "camera", "backend", "login", "llm", "system"}
+LOG_SOURCES = {"plate", "gesture", "camera", "backend", "auth", "login", "llm", "traffic_police", "fusion", "operation", "system"}
 logger = logging.getLogger("alert_agent")
 
 
@@ -140,11 +140,14 @@ def normalize_module(name: str) -> str:
         "gesture_recognition": "gesture",
         "camera": "camera",
         "camera_stream": "camera",
-        "auth": "login",
+        "auth": "auth",
         "login": "login",
         "api": "backend",
         "backend": "backend",
         "llm": "llm",
+        "fusion_agent": "fusion",
+        "traffic_police": "traffic_police",
+        "operation": "operation",
     }
     for key, value in aliases.items():
         if key in lowered:

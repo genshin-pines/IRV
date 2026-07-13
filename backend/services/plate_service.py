@@ -18,8 +18,8 @@ logger = logging.getLogger("plate")
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 PLATE_VENDOR = PROJECT_DIR / "vendor" / "plate_hyperlpr"
-TRACKER_CONFIG = "bytetrack.yaml"
-MIN_PLATE_CONFIDENCE = 0.90
+
+MIN_PLATE_CONFIDENCE = 0.98
 
 PLATE_COLOR_MAP = {
     -1: "未知",
@@ -211,10 +211,7 @@ def recognize_image_bytes(contents: bytes, filename: str = "upload") -> dict[str
 
 
 def recognize_video_file(path: str, filename: str = "video", interval: float = 0.5) -> dict[str, Any]:
-    _ensure_vendor_path()
-    from plate_track_store import PlateTrackStore  # type: ignore
-    from vehicle_lpr import VEHICLE_CLASS_IDS, expand_box, get_vehicle_model, is_valid_plate_code, map_plate_bbox_from_crop  # type: ignore
-
+    """识别视频文件中的车牌 — 与 recognize_stream 使用相同的逐帧 _recognize_image_array 逻辑。"""
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         logger.error("plate video failed: cannot open video filename=%s", filename)
@@ -223,121 +220,53 @@ def recognize_video_file(path: str, filename: str = "video", interval: float = 0
     fps = cap.get(cv2.CAP_PROP_FPS) or 25
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration = total_frames / fps if fps else 0
-    cap.release()
 
-    frame_step = max(1, int(fps * interval)) if fps > 0 else 1
-    model = get_vehicle_model()
-    store = PlateTrackStore(min_confidence=MIN_PLATE_CONFIDENCE)
-    catcher = get_catcher()
-
+    step = max(1, int(fps * interval)) if fps > 0 else 1
+    plate_best: dict[str, dict[str, Any]] = {}
+    rejected_total = 0
     processed = 0
-    tracked_frames = 0
-    vehicle_regions = 0
-    rejected_count = 0
+    frame_idx = 0
     t0 = time.perf_counter()
 
-    stream = model.track(
-        source=path,
-        stream=True,
-        tracker=TRACKER_CONFIG,
-        classes=VEHICLE_CLASS_IDS,
-        conf=0.25,
-        imgsz=640,
-        verbose=False,
-    )
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if frame_idx % step == 0:
+                processed += 1
+                timestamp = round(frame_idx / fps, 2) if fps > 0 else 0
+                plates, _regions, rejected, _elapsed = _recognize_image_array(frame, source=filename)
+                rejected_total += len(rejected)
+                for plate in plates:
+                    plate = dict(plate)
+                    plate["time_sec"] = timestamp
+                    code = plate["plate_code"]
+                    if code not in plate_best or plate["confidence"] > plate_best[code]["confidence"]:
+                        plate_best[code] = plate
+            frame_idx += 1
+    finally:
+        cap.release()
 
-    for frame_idx, result in enumerate(stream):
-        frame = result.orig_img
-        if frame is None or result.boxes is None or result.boxes.id is None:
-            continue
-
-        timestamp = round(frame_idx / fps, 2) if fps > 0 else 0
-        boxes = result.boxes
-        ids = boxes.id.cpu().numpy().astype(int)
-        xyxy = boxes.xyxy.cpu().numpy()
-        confs = boxes.conf.cpu().numpy()
-        tracked_frames += 1
-        should_ocr = frame_idx % frame_step == 0
-        if should_ocr:
-            processed += 1
-
-        height, width = frame.shape[:2]
-        for track_id, box, vehicle_conf in zip(ids, xyxy, confs):
-            bbox = expand_box(box, width, height, 0.15)
-            store.update_track(track_id, bbox, timestamp, float(vehicle_conf))
-
-            if not should_ocr:
-                continue
-
-            x1, y1, x2, y2 = bbox
-            if x2 <= x1 or y2 <= y1:
-                continue
-            crop = frame[y1:y2, x1:x2]
-            if crop.size == 0:
-                continue
-
-            vehicle_regions += 1
-            scale = 2.0
-            crop = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
-            found = False
-            for raw in catcher(crop):
-                found = True
-                plate_code = raw[0]
-                confidence = _normalize_confidence(raw[1])
-                plate_type = int(raw[2])
-                plate_bbox = map_plate_bbox_from_crop([int(v) for v in raw[3]], bbox, scale)
-                before = len(store.tracks.get(track_id).candidates) if store.tracks.get(track_id) else 0
-                store.add_plate(
-                    track_id,
-                    plate_code,
-                    confidence,
-                    plate_type,
-                    timestamp,
-                    plate_bbox=plate_bbox,
-                )
-                after = len(store.tracks.get(track_id).candidates) if store.tracks.get(track_id) else 0
-                if after == before:
-                    rejected_count += 1
-                    reason = "invalid_format" if not is_valid_plate_code(plate_code) else "low_confidence"
-                    _log_plate_reject(
-                        {
-                            "plate_code": plate_code,
-                            "confidence": confidence,
-                            "plate_type": plate_type,
-                            "bbox": plate_bbox,
-                            "reject_reasons": [reason],
-                        },
-                        source=filename,
-                    )
-            if not found:
-                rejected_count += 1
-
-    plates = [_with_plate_color(plate) for plate in store.final_results()]
-    for plate in plates:
-        _log_plate_accept(plate, source=filename)
-
+    plates = sorted(plate_best.values(), key=lambda item: item.get("time_sec", 0))
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
     logger.info(
-        "plate video success: filename=%s processed=%s tracked=%s unique=%s latency_ms=%s",
+        "plate video success: source=%s processed=%s unique=%s latency_ms=%s",
         filename,
         processed,
-        tracked_frames,
         len(plates),
         elapsed_ms,
     )
     return {
-        "filename": filename,
+        "source": filename,
         "fps": round(float(fps), 1),
         "total_frames": total_frames,
         "duration_sec": round(duration, 1),
         "sample_interval_sec": interval,
         "processed_frames": processed,
-        "tracked_frames": tracked_frames,
-        "vehicle_regions": vehicle_regions,
-        "rejected_count": rejected_count,
+        "rejected_count": rejected_total,
         "unique_plates": len(plates),
         "inference_ms": elapsed_ms,
-        "tracker": "ByteTrack",
         "plates": plates,
     }
 
@@ -357,10 +286,11 @@ def recognize_video_bytes(contents: bytes, filename: str, interval: float = 0.5)
 
 
 def recognize_stream(rtsp_url: str, duration_sec: float = 8, sample_interval: float = 0.5) -> dict[str, Any]:
+    """识别 RTSP 视频流中的车牌 — 与 recognize_video_file 使用相同的逐帧 _recognize_image_array 逻辑。"""
     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not cap.isOpened():
-        logger.error("camera stream disconnected: %s", rtsp_url)
+        logger.error("plate stream failed: cannot open stream url=%s", rtsp_url)
         write_log("camera", "ERROR", f"RTSP disconnected Camera timeout url={rtsp_url}")
         raise ValueError("无法打开 RTSP 视频流")
 
@@ -377,6 +307,8 @@ def recognize_stream(rtsp_url: str, duration_sec: float = 8, sample_interval: fl
         while frame_idx < max_frames:
             ok, frame = cap.read()
             if not ok:
+                logger.error("plate stream read failed mid-stream: %s", rtsp_url)
+                write_log("camera", "ERROR", f"RTSP disconnected Camera timeout url={rtsp_url}")
                 break
             if frame_idx % step == 0:
                 processed += 1
@@ -396,14 +328,16 @@ def recognize_stream(rtsp_url: str, duration_sec: float = 8, sample_interval: fl
     plates = sorted(plate_best.values(), key=lambda item: item.get("time_sec", 0))
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
     logger.info(
-        "plate stream success: url=%s processed=%s unique=%s latency_ms=%s",
+        "plate stream success: source=%s processed=%s unique=%s latency_ms=%s",
         rtsp_url,
         processed,
         len(plates),
         elapsed_ms,
     )
     return {
-        "rtsp_url": rtsp_url,
+        "source": rtsp_url,
+        "fps": round(float(fps), 1),
+        "total_frames": max_frames,
         "duration_sec": duration_sec,
         "sample_interval_sec": sample_interval,
         "processed_frames": processed,

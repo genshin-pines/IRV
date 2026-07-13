@@ -12,6 +12,7 @@ import cv2
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
+from backend.services.log_service import write_log
 from backend.services.plate_service import (
     publish_plate_events,
     recognize_image_bytes,
@@ -36,7 +37,9 @@ class StreamRequest(BaseModel):
 @router.post("/recognize-image")
 async def api_recognize_image(file: UploadFile = File(...)):
     try:
-        data = recognize_image_bytes(await file.read(), filename=file.filename or "upload")
+        contents = await file.read()
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, recognize_image_bytes, contents, file.filename or "upload")
         await publish_plate_events(data.get("plates", []), camera_id=file.filename or "upload")
         return response(data)
     except Exception as exc:
@@ -46,7 +49,9 @@ async def api_recognize_image(file: UploadFile = File(...)):
 @router.post("/recognize-video")
 async def api_recognize_video(file: UploadFile = File(...), interval: float = Query(0.5, ge=0.1, le=10)):
     try:
-        data = recognize_video_bytes(await file.read(), filename=file.filename or "video", interval=interval)
+        contents = await file.read()
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, recognize_video_bytes, contents, file.filename or "video", interval)
         await publish_plate_events(data.get("plates", []), camera_id=file.filename or "video")
         return response(data)
     except Exception as exc:
@@ -99,6 +104,7 @@ async def api_local_video_live(ws: WebSocket):
             return
         await asyncio.to_thread(warmup_models)
         if not manager.open(path):
+            write_log("plate", "ERROR", f"plate video failed: cannot open video filename={path.name}")
             await ws.send_json({"type": "error", "message": "无法打开本地视频"})
             return
 
@@ -140,7 +146,8 @@ async def api_local_video_live(ws: WebSocket):
 @router.post("/recognize-stream")
 async def api_recognize_stream(payload: StreamRequest):
     try:
-        data = recognize_stream(payload.rtsp_url, payload.duration_sec, payload.sample_interval)
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, recognize_stream, payload.rtsp_url, payload.duration_sec, payload.sample_interval)
         await publish_plate_events(data.get("plates", []), camera_id=payload.rtsp_url)
         return response(data)
     except Exception as exc:

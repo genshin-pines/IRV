@@ -86,63 +86,61 @@ _LABEL_MAP = {
     "INFO": "信息",
 }
 
+# 结构化摘要的四段标签（顺序固定，与 LLM prompt 和 templates.py 对齐）
+_SECTION_LABELS = [
+    "异常类型与现象",
+    "影响范围",
+    "告警原因分析",
+    "建议处置措施",
+]
+
+
+def _parse_summary(summary: str) -> list[str]:
+    """将 LLM/规则引擎输出的多段摘要拆分为各段内容。
+
+    LLM 输出四段纯文本，用空行分隔；规则引擎的模板也使用相同的 \\n\\n 格式。
+    返回恰好 4 个元素的列表，空段用占位文本填充。
+    """
+    parts = [p.strip() for p in summary.strip().split("\n\n") if p.strip()]
+    while len(parts) < 4:
+        parts.append("（暂无详细信息）")
+    return parts[:4]
+
 
 def _make_card(alert: Dict) -> Dict:
-    """构建飞书 Lark MD 卡片消息"""
+    """构建飞书 Lark MD 卡片消息 — 结构化文本模板。"""
     level = alert.get("level", "INFO")
     title = alert.get("title", "告警")
     summary = alert.get("summary", "")
-    detail = alert.get("detail", "")
     source_module = alert.get("source_module", "")
-    affected = alert.get("affected_modules", [])
     ai_generated = alert.get("ai_generated", False)
 
     color = _COLOR_MAP.get(level, "blue")
     icon = _ICON_MAP.get(level, "🔵")
     label = _LABEL_MAP.get(level, "信息")
     now_str = datetime.now(_BEIJING_TZ).strftime("%Y-%m-%d %H:%M 北京")
+    gen_method = "🤖 LLM 深度分析" if ai_generated else "⚙️ 规则引擎检测"
 
-    # 构建 Markdown 内容块
-    elements = [
-        {
-            "tag": "markdown",
-            "content": f"**摘要**\n{summary}",
-        },
-    ]
+    # ── Body：四段式结构化文本 ──
+    sections = _parse_summary(summary)
+    body_lines = []
+    for index, heading in enumerate(_SECTION_LABELS):
+        body_lines.append(f"**{heading}**")
+        body_lines.append(sections[index])
+        if index < 3:
+            body_lines.append("")
 
-    if detail:
-        elements.append({"tag": "hr"})
-        elements.append({
-            "tag": "markdown",
-            "content": f"**详情**\n{detail}",
-        })
+    body_lines.append("")
+    body_lines.append("---")
+    body_lines.append(f"📋 来源模块：{source_module}　|　🔧 {gen_method}")
+    body_lines.append(f"IRV 告警系统 · {now_str}")
 
-    elements.append({"tag": "hr"})
-    meta_parts = []
-    if source_module:
-        meta_parts.append(f"**来源模块**: {source_module}")
-    if affected:
-        meta_parts.append(f"**影响范围**: {', '.join(affected)}")
-    meta_parts.append(f"**生成方式**: ⚙️ 规则引擎检测{' + 🤖 LLM 深度分析' if ai_generated else '（LLM 未参与）'}")
-    elements.append({
-        "tag": "markdown",
-        "content": "\n".join(meta_parts),
-    })
+    body_md = "\n".join(body_lines)
 
-    # 底部时间戳
-    elements.append({
-        "tag": "note",
-        "elements": [
-            {"tag": "plain_text", "content": f"IRV 告警系统 · {now_str}"},
-        ],
-    })
-
-    # CRITICAL 时 @所有人
+    # ── CRITICAL 时 @所有人 ──
+    elements: list[dict] = [{"tag": "markdown", "content": body_md}]
     if level == "CRITICAL":
-        elements.append({
-            "tag": "markdown",
-            "content": "<at id=all></at>",
-        })
+        elements.append({"tag": "markdown", "content": "<at id=all></at>"})
 
     card = {
         "header": {
@@ -192,19 +190,33 @@ async def send_alert_notification(alert: Dict) -> bool:
 
 async def send_test_message(message: str = "🧪 飞书通知连通性测试") -> bool:
     """发送一条测试消息到飞书群（用于验证配置）"""
+    now_str = datetime.now(_BEIJING_TZ).strftime("%Y-%m-%d %H:%M 北京")
+    body_lines = [
+        "**异常类型与现象**",
+        message,
+        "",
+        "**影响范围**",
+        "测试消息，无实际影响",
+        "",
+        "**告警原因分析**",
+        "人工触发连通性测试",
+        "",
+        "**建议处置措施**",
+        "无需处置，此为测试消息",
+        "",
+        "---",
+        "📋 来源模块：system　|　🔧 手动测试",
+        f"IRV 告警系统 · {now_str}",
+    ]
+    body_md = "\n".join(body_lines)
+
     card = {
         "header": {
             "title": {"tag": "plain_text", "content": "🧪 通知测试"},
             "template": "blue",
         },
         "elements": [
-            {"tag": "markdown", "content": message},
-            {
-                "tag": "note",
-                "elements": [
-                    {"tag": "plain_text", "content": f"IRV 告警系统 · {datetime.now(_BEIJING_TZ).strftime('%Y-%m-%d %H:%M 北京')}"},
-                ],
-            },
+            {"tag": "markdown", "content": body_md},
         ],
     }
 

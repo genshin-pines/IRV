@@ -89,7 +89,7 @@ async def api_traffic_police_frame(file: UploadFile = File(...)):
 async def api_gesture_event(event: GestureEvent):
     command = event.command or map_event_to_vehicle(event.model_dump())
     write_log("gesture", "INFO", f"gesture event source={event.source} type={event.gesture_type} confidence={event.confidence} stable={event.stable} command={command}")
-    if event.confidence < 0.75:
+    if event.confidence < 0.98:
         write_log("gesture", "WARNING", f"gesture confidence low source={event.source} type={event.gesture_type} confidence={event.confidence}")
 
     # 推送车主手势到融合引擎（三路感知 EventBus）

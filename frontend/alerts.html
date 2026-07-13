@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>IRV 告警中心</title>
+  <style>
+    :root{--bg:#05080d;--card:#0b1119;--card-2:#0e1621;--ink:#eef6ff;--muted:#8290a3;--line:#1d2a38;--teal:#18d4c3;--blue:#4d8dff;--coral:#ff655d;--warning:#f3b64b;--shadow:none;color-scheme:dark}
+    body{background:#05080d;color:var(--ink);margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:0}
+    body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.24;background-image:linear-gradient(rgba(77,141,255,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(77,141,255,.06) 1px,transparent 1px);background-size:42px 42px}
+    .cockpit-app{position:relative;z-index:1;min-height:100vh;padding:16px 24px 40px}
+    .alerts-shell{max-width:1400px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+    .alerts-nav{max-width:1400px;margin:0 auto 14px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .nav-left{display:flex;align-items:center;gap:12px}
+    .nav-left h1{font-size:18px;margin:0;color:var(--teal)}
+    .nav-left .nav-link{color:var(--muted);text-decoration:none;font-size:13px;padding:4px 10px;border-radius:4px;border:1px solid var(--line)}
+    .nav-left .nav-link:hover{color:var(--ink);border-color:var(--teal)}
+    .cockpit-module{min-width:0;border:1px solid var(--line);border-radius:8px;background:rgba(11,17,25,.96);box-shadow:0 14px 34px rgba(0,0,0,.2)}
+    .module-head{min-height:48px;padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+    .module-title{display:flex;align-items:center;gap:10px;min-width:0}.module-title svg{width:18px;height:18px;color:var(--teal)}
+    .module-title h2,.module-title h3{margin:0;font-size:14px;line-height:1.25;letter-spacing:0}
+    .module-title p{margin:3px 0 0;color:var(--muted);font-size:11px;line-height:1.35}
+    .module-body{padding:14px}
+
+    /* Stat Tiles */
+    .stats-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    .stat-tile{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:7px;padding:16px 18px;background:var(--card-2)}
+    .stat-tile .stat-icon{width:44px;height:44px;border-radius:8px;display:grid;place-items:center;flex-shrink:0}
+    .stat-tile .stat-icon svg{width:22px;height:22px}
+    .stat-tile .stat-body strong{display:block;font-size:28px;line-height:1.15;font-variant-numeric:tabular-nums}
+    .stat-tile .stat-body span{font-size:11px;color:var(--muted)}
+    .stat-tile.today .stat-icon{background:rgba(24,212,195,.14);color:var(--teal)}
+    .stat-tile.today strong{color:var(--teal)}
+    .stat-tile.unread .stat-icon{background:rgba(243,182,75,.14);color:var(--warning)}
+    .stat-tile.unread strong{color:var(--warning)}
+    .stat-tile.error .stat-icon{background:rgba(255,101,93,.14);color:var(--coral)}
+    .stat-tile.error strong{color:var(--coral)}
+    .stat-tile.critical .stat-icon{background:rgba(255,101,93,.18);color:#ff3b30}
+    .stat-tile.critical strong{color:#ff3b30}
+    .stat-tile.primary{grid-column:1/-1;border-color:rgba(24,212,195,.3);background:rgba(24,212,195,.06)}
+    .stat-tile .sub-stats{display:flex;gap:16px;margin-top:4px;font-size:12px;color:var(--muted)}
+    .stat-tile .sub-stats b{font-size:14px;color:var(--ink)}
+
+    /* Charts */
+    .stats-charts{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+    .chart-box{position:relative;height:260px}
+    .chart-box.wide{grid-column:1/-1;height:220px}
+    .chart-box .chart-title{position:absolute;top:8px;left:12px;z-index:2;font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.5px}
+    .chart-box .chart-inner{width:100%;height:100%}
+
+    /* Filter Bar */
+    .filter-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 0}
+    .filter-bar .n-input{min-width:200px;max-width:280px}
+    .filter-bar .n-select{min-width:110px}
+
+    /* Alert Table */
+    .alert-table-wrap{min-height:240px}
+    .level-tag{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase}
+    .level-tag.critical{background:rgba(255,59,48,.18);color:#ff3b30}
+    .level-tag.error{background:rgba(255,101,93,.14);color:var(--coral)}
+    .level-tag.warning{background:rgba(243,182,75,.14);color:var(--warning)}
+    .level-tag.info{background:rgba(77,141,255,.12);color:var(--blue)}
+    .status-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
+    .status-dot.unread{background:var(--blue);box-shadow:0 0 6px rgba(77,141,255,.6)}
+    .status-dot.read{background:var(--muted)}
+    .status-dot.acknowledged{background:var(--teal)}
+    .status-dot.resolved{background:#526172}
+    .row-actions{display:flex;gap:4px}
+
+    /* Detail Layout */
+    .detail-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.75fr);gap:14px}
+    .cause-analysis .empty-state,.event-replay .empty-state{padding:40px 20px;text-align:center;color:var(--muted)}
+    .cause-analysis .empty-state svg,.event-replay .empty-state svg{width:40px;height:40px;margin-bottom:10px;opacity:.5}
+    .detail-section{margin-bottom:16px}
+    .detail-section h4{margin:0 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+    .detail-field{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(29,42,56,.5);font-size:13px}
+    .detail-field .field-label{color:var(--muted);flex-shrink:0;margin-right:12px}
+    .detail-field .field-value{text-align:right;word-break:break-all}
+    .raw-log-block,.llm-block{margin-top:10px;padding:10px 12px;border-radius:6px;font-size:12px;line-height:1.55;max-height:200px;overflow:auto}
+    .raw-log-block{background:#0e1722;border:1px solid #1c2b3b;color:#aebdd0;font-family:"SF Mono","Fira Code","Consolas",monospace;white-space:pre-wrap}
+    .llm-block{background:#0f1a24;border:1px solid #1a3a44;color:#c3dbef}
+    .llm-badge{display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:12px;background:rgba(77,141,255,.14);color:var(--blue);font-size:11px;font-weight:600}
+    .detail-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+
+    /* Event Replay */
+    .replay-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+    .replay-progress{flex:1;min-width:120px;font-size:12px;color:var(--muted)}
+    .replay-event-card{padding:14px;border:1px solid var(--line);border-radius:7px;background:var(--card-2);margin-bottom:14px}
+    .replay-event-card .replay-time{font-size:11px;color:var(--muted);margin-bottom:6px}
+    .replay-dots{display:flex;gap:3px;flex-wrap:wrap;max-height:80px;overflow:auto;padding:8px 0}
+    .replay-dot{width:9px;height:9px;border-radius:50%;background:var(--line);flex-shrink:0;cursor:pointer;transition:all .15s}
+    .replay-dot:hover{transform:scale(1.4)}
+    .replay-dot.current{background:var(--teal);transform:scale(1.5);box-shadow:0 0 8px rgba(24,212,195,.5)}
+    .replay-dot.critical{background:#ff3b30}.replay-dot.error{background:var(--coral)}
+    .replay-dot.warning{background:var(--warning)}.replay-dot.info{background:var(--blue)}
+    .replay-speed{margin-left:8px}
+
+    /* Auth Styles */
+    .auth-stage{display:grid;place-items:center;min-height:100vh;padding:20px;background:#05080d}
+    .auth-panel{width:100%;max-width:440px;border:1px solid #223246;border-radius:8px;background:#0b1119;padding:28px 24px 22px;box-shadow:0 24px 80px rgba(0,0,0,.5)}
+    .auth-panel h1{font-size:20px;margin:0 0 6px}
+    .auth-panel .subtitle{color:var(--muted);font-size:12px;margin-bottom:18px}
+    .auth-tabs,.auth-roles{display:flex;gap:6px;margin-bottom:12px}
+    .auth-tab,.auth-role{padding:8px 16px;border-radius:6px;border:1px solid #26384b;background:#0e1722;color:#c7d5e4;cursor:pointer;font-size:13px;flex:1;text-align:center}
+    .auth-tab.on,.auth-role.on{background:#102a2d;border-color:#1aa99c;color:#7ff3e8}
+    .auth-form{display:flex;flex-direction:column;gap:10px}
+    .auth-error{color:var(--coral);font-size:12px;min-height:18px}
+    .auth-form .line{display:flex;gap:8px;align-items:center}
+    .auth-form .hint{font-size:11px;color:var(--muted);margin-top:4px}
+
+    .hidden{display:none!important}
+    .n-button{letter-spacing:0}
+
+    @media(max-width:900px){
+      .stats-tiles{grid-template-columns:repeat(2,1fr)}.stats-tiles .primary{grid-column:span 2}
+      .stats-charts{grid-template-columns:1fr}
+      .detail-layout{grid-template-columns:1fr}
+      .filter-bar{flex-direction:column}.filter-bar .n-input{max-width:100%}
+      .alerts-nav{flex-wrap:wrap}
+    }
+    @media(max-width:700px){
+      .cockpit-app{padding:10px 8px 32px}
+      .stats-tiles{grid-template-columns:1fr}.stats-tiles .primary{grid-column:1}
+    }
+  </style>
+</head>
+<body>
+  <div id="app" v-cloak>
+    <n-config-provider :theme="darkTheme" :theme-overrides="theme">
+      <n-message-provider>
+
+        <div v-if="!isAuthed" class="auth-stage" @keyup.enter="submitAuth">
+          <section class="auth-panel">
+            <h1>IRV 告警中心</h1>
+            <p class="subtitle">登录后可查看告警历史、分析原因并回放事件。</p>
+            <div class="auth-tabs"><button class="auth-tab" :class="{on:auth.mode==='login'}" @click="switchMode('login')">登录</button><button class="auth-tab" :class="{on:auth.mode==='register'}" @click="switchMode('register')">注册</button></div>
+            <div class="auth-roles"><button class="auth-role" :class="{on:auth.role==='admin'}" @click="chooseRole('admin')"><b>管理者端</b></button><button class="auth-role" :class="{on:auth.role==='driver'}" @click="chooseRole('driver')"><b>车主端</b></button></div>
+            <div class="auth-form">
+              <n-input v-if="auth.mode==='register'" v-model:value="auth.displayName" placeholder="显示名称"></n-input>
+              <n-input v-model:value="auth.username" placeholder="账号"></n-input>
+              <n-input v-model:value="auth.password" type="password" show-password-on="click" placeholder="密码"></n-input>
+              <n-input v-if="auth.mode==='register'" v-model:value="auth.confirm" type="password" show-password-on="click" placeholder="确认密码"></n-input>
+              <div class="auth-error">{{auth.error}}</div>
+              <div class="line"><n-button tertiary @click="fillDemo"><template #icon><i data-lucide="key-round"></i></template>演示账号</n-button><n-button type="primary" :loading="auth.loading" @click="submitAuth"><template #icon><i :data-lucide="auth.mode==='register'?'user-plus':'log-in'"></i></template>{{auth.mode==='register'?'完成注册':'进入系统'}}</n-button></div>
+            </div>
+          </section>
+        </div>
+
+        <div v-else class="cockpit-app">
+          <nav class="alerts-nav">
+            <div class="nav-left">
+              <h1><i data-lucide="shield-alert" style="vertical-align:middle;margin-right:6px;width:20px;height:20px"></i>告警中心</h1>
+              <a href="/" class="nav-link"><i data-lucide="arrow-left" style="width:14px;height:14px;vertical-align:middle"></i> 返回驾驶舱</a>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:11px;color:var(--muted)">{{sessionUser?.displayName||sessionUser?.username}}</span>
+              <span class="signal" :class="wsConnected?'on':''" style="font-size:10px">{{wsConnected?'WS':'离线'}}</span>
+              <n-button quaternary size="small" @click="logout"><template #icon><i data-lucide="log-out"></i></template>登出</n-button>
+            </div>
+          </nav>
+
+          <main class="alerts-shell">
+            <!-- §1 统计仪表盘 -->
+            <section class="cockpit-module">
+              <div class="module-head"><div class="module-title"><i data-lucide="bar-chart-3"></i><div><h2>统计仪表盘</h2><p>告警分布与趋势概览</p></div></div><n-select v-model:value="trendHours" :options="trendOptions" size="small" style="width:100px" @update:value="loadStats"/></div>
+              <div class="module-body">
+                <div class="stats-tiles">
+                  <div class="stat-tile today primary"><div class="stat-icon"><i data-lucide="calendar-days"></i></div><div class="stat-body"><strong>{{stats.today_count}}</strong><span>今日告警</span><div class="sub-stats">未确认 <b>{{stats.unread_count}}</b> · 错误&严重 <b>{{stats.error_count + stats.critical_count}}</b></div></div></div>
+                  <div class="stat-tile unread"><div class="stat-icon"><i data-lucide="bell-dot"></i></div><div class="stat-body"><strong>{{stats.unread_count}}</strong><span>未确认</span></div></div>
+                  <div class="stat-tile error"><div class="stat-icon"><i data-lucide="alert-triangle"></i></div><div class="stat-body"><strong>{{stats.error_count + stats.critical_count}}</strong><span>错误 & 严重</span></div></div>
+                  <div class="stat-tile critical"><div class="stat-icon"><i data-lucide="zap"></i></div><div class="stat-body"><strong>{{stats.total_count}}</strong><span>累计告警</span></div></div>
+                </div>
+                <div class="stats-charts">
+                  <div class="chart-box"><div class="chart-title">告警级别分布</div><div ref="levelChart" class="chart-inner"></div></div>
+                  <div class="chart-box"><div class="chart-title">模块来源分布</div><div ref="moduleChart" class="chart-inner"></div></div>
+                  <div class="chart-box wide"><div class="chart-title">趋势变化</div><div ref="trendChart" class="chart-inner"></div></div>
+                </div>
+              </div>
+            </section>
+
+            <!-- §2 告警时间线 -->
+            <section class="cockpit-module">
+              <div class="module-head"><div class="module-title"><i data-lucide="list-todo"></i><div><h2>告警时间线</h2><p>共 {{alertTotal}} 条记录</p></div></div><n-button size="small" quaternary @click="loadAlerts()"><template #icon><i data-lucide="refresh-cw"></i></template>刷新</n-button></div>
+              <div class="module-body">
+                <div class="filter-bar">
+                  <n-input v-model:value="filters.search" placeholder="搜索告警标题..." clearable @update:value="onFilterChange"/>
+                  <n-select v-model:value="filters.level" :options="levelOptions" placeholder="级别" clearable @update:value="loadAlerts()"/>
+                  <n-select v-model:value="filters.status" :options="statusOptions" placeholder="状态" clearable @update:value="loadAlerts()"/>
+                  <n-select v-model:value="filters.timeRange" :options="timeRangeOptions" placeholder="时间范围" @update:value="onTimeRangeChange"/>
+                </div>
+                <div class="alert-table-wrap">
+                  <n-data-table :columns="tableColumns" :data="alerts" :loading="tableLoading" :row-key="r=>r.id" :row-props="rowProps" striped size="small" flex-height style="height:400px"/>
+                </div>
+                <div style="display:flex;justify-content:center;margin-top:12px">
+                  <n-pagination v-model:page="pagination.page" :page-size="pagination.pageSize" :item-count="alertTotal" :page-sizes="[10,20,50]" show-size-picker @update:page="loadAlerts()" @update:page-size="onPageSizeChange"/>
+                </div>
+              </div>
+            </section>
+
+            <!-- §3 & §4 双栏 -->
+            <div class="detail-layout">
+              <!-- §3 原因分析 -->
+              <section class="cockpit-module cause-analysis">
+                <div class="module-head"><div class="module-title"><i data-lucide="search"></i><div><h2>原因分析</h2><p>告警详情与根因</p></div></div></div>
+                <div class="module-body" v-if="selectedAlert">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+                    <span :class="'level-tag '+(selectedAlert.level||'info').toLowerCase()">{{selectedAlert.level}}</span>
+                    <span style="font-size:11px;color:var(--muted)">{{selectedAlert.created_at}}</span>
+                    <span :class="'status-dot '+(selectedAlert.status||'unread').toLowerCase()"></span>
+                    <span style="font-size:11px;color:var(--muted)">{{statusLabel(selectedAlert.status)}}</span>
+                  </div>
+                  <h3 style="margin:0 0 8px;font-size:16px">{{selectedAlert.title}}</h3>
+                  <p style="margin:0 0 14px;color:var(--muted);font-size:13px;line-height:1.55">{{selectedAlert.summary}}</p>
+
+                  <div class="detail-section"><h4>基本信息</h4>
+                    <div class="detail-field"><span class="field-label">来源模块</span><span class="field-value">{{selectedAlert.source_module}}</span></div>
+                    <div class="detail-field"><span class="field-label">AI 生成</span><span class="field-value">{{selectedAlert.ai_generated?'是':'否'}}</span></div>
+                    <div class="detail-field"><span class="field-label">确认人</span><span class="field-value">{{selectedAlert.ack_user||'—'}}</span></div>
+                    <div class="detail-field"><span class="field-label">确认时间</span><span class="field-value">{{selectedAlert.ack_time||'—'}}</span></div>
+                  </div>
+
+                  <div v-if="selectedAlert.raw_log" class="detail-section"><h4>原始日志</h4>
+                    <div class="raw-log-block">{{selectedAlert.raw_log}}</div>
+                  </div>
+
+                  <div v-if="selectedAlert.llm_summary" class="detail-section"><h4><span class="llm-badge"><i data-lucide="sparkles" style="width:12px;height:12px"></i>LLM 分析</span></h4>
+                    <div class="llm-block">{{selectedAlert.llm_summary}}</div>
+                  </div>
+
+                  <div class="detail-actions">
+                    <n-button v-if="selectedAlert.status==='UNREAD'" size="small" type="primary" @click="ackAlert(selectedAlert.id)"><template #icon><i data-lucide="check-circle"></i></template>确认告警</n-button>
+                    <n-button v-if="selectedAlert.status==='ACKNOWLEDGED'" size="small" secondary @click="unackAlert(selectedAlert.id)"><template #icon><i data-lucide="undo-2"></i></template>撤销确认</n-button>
+                    <n-button v-if="selectedAlert.status!=='RESOLVED'" size="small" type="warning" @click="resolveAlert(selectedAlert.id)"><template #icon><i data-lucide="shield-check"></i></template>标记已解决</n-button>
+                    <n-button v-if="selectedAlert.status==='RESOLVED'" size="small" quaternary @click="unackAlert(selectedAlert.id)"><template #icon><i data-lucide="rotate-ccw"></i></template>重新打开</n-button>
+                    <n-button size="small" quaternary type="error" @click="deleteAlert(selectedAlert.id)"><template #icon><i data-lucide="trash-2"></i></template>删除</n-button>
+                  </div>
+                </div>
+                <div class="module-body empty-state" v-else>
+                  <i data-lucide="pointer" style="width:36px;height:36px;opacity:.4;margin-bottom:8px"></i>
+                  <p>选择一条告警查看详情</p>
+                </div>
+              </section>
+
+              <!-- §4 事件回放 -->
+              <section class="cockpit-module event-replay">
+                <div class="module-head"><div class="module-title"><i data-lucide="play-circle"></i><div><h2>事件回放</h2><p>按时间轴回顾告警</p></div></div></div>
+                <div class="module-body" v-if="replay.alerts.length">
+                  <div class="replay-controls">
+                    <n-button size="small" @click="replayStep(-1)" :disabled="replay.index<=0"><template #icon><i data-lucide="skip-back"></i></template></n-button>
+                    <n-button size="small" :type="replay.playing?'warning':'primary'" @click="replayToggle">{{replay.playing?'暂停':'播放'}}</n-button>
+                    <n-button size="small" @click="replayStep(1)" :disabled="replay.index>=replay.alerts.length-1"><template #icon><i data-lucide="skip-forward"></i></template></n-button>
+                    <span class="replay-progress">{{replay.index+1}} / {{replay.alerts.length}}</span>
+                    <n-select class="replay-speed" v-model:value="replay.speed" :options="speedOptions" size="tiny" style="width:70px"/>
+                  </div>
+                  <div class="replay-event-card" v-if="currentReplay">
+                    <div class="replay-time">{{currentReplay.created_at}}</div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                      <span :class="'level-tag '+(currentReplay.level||'info').toLowerCase()">{{currentReplay.level}}</span>
+                      <b style="font-size:14px">{{currentReplay.title}}</b>
+                    </div>
+                    <p style="margin:6px 0 0;color:var(--muted);font-size:12px;line-height:1.5">{{currentReplay.summary}}</p>
+                  </div>
+                  <div class="replay-dots">
+                    <span v-for="(a,i) in replay.alerts" :key="a.id" :class="['replay-dot',(a.level||'info').toLowerCase(),{current:i===replay.index}]" :title="a.title" @click="replayGo(i)"></span>
+                  </div>
+                </div>
+                <div class="module-body empty-state" v-else>
+                  <i data-lucide="clock" style="width:36px;height:36px;opacity:.4;margin-bottom:8px"></i>
+                  <p>加载告警数据后可在此时序回放</p>
+                  <n-button size="small" secondary @click="loadReplayData">加载回放数据</n-button>
+                </div>
+              </section>
+            </div>
+          </main>
+        </div>
+
+      </n-message-provider>
+    </n-config-provider>
+  </div>
+
+  <script src="/static/vendor/vue.global.prod.js"></script>
+  <script src="/static/vendor/naive-ui.prod.js"></script>
+  <script src="/static/vendor/echarts.min.js"></script>
+  <script src="/static/vendor/anime.min.js"></script>
+  <script src="/static/vendor/lucide.min.js"></script>
+  <script>
+    const {createApp,ref,reactive,computed,onMounted,onBeforeUnmount,nextTick,watch}=Vue;
+    createApp({setup(){
+      const darkTheme=naive.darkTheme,message=naive.useMessage();
+      const subtle=window.crypto?.subtle,enc=new TextEncoder(),dec=new TextDecoder();let aesKeyPromise=null;
+
+      // Auth
+      const isAuthed=ref(false),sessionUser=ref(null),authToken=ref('');
+      const auth=reactive({mode:'login',role:'driver',username:'driver',password:'123456',displayName:'',confirm:'',error:'',loading:false});
+
+      // Stats
+      const stats=reactive({today_count:0,total_count:0,unread_count:0,error_count:0,critical_count:0,by_module:{},by_level:{},trend:[]});
+      const trendHours=ref(24);
+      const trendOptions=[{label:'4 小时',value:4},{label:'12 小时',value:12},{label:'24 小时',value:24},{label:'7 天',value:168}];
+
+      // Alerts
+      const alerts=ref([]),alertTotal=ref(0),selectedAlert=ref(null),tableLoading=ref(false);
+      const filters=reactive({search:'',level:null,status:null,timeRange:'24h'});
+      const pagination=reactive({page:1,pageSize:20});
+      const levelOptions=[{label:'全部级别',value:null},{label:'INFO',value:'INFO'},{label:'WARNING',value:'WARNING'},{label:'ERROR',value:'ERROR'},{label:'CRITICAL',value:'CRITICAL'}];
+      const statusOptions=[{label:'全部状态',value:null},{label:'未确认',value:'UNREAD'},{label:'已读',value:'READ'},{label:'已确认',value:'ACKNOWLEDGED'},{label:'已解决',value:'RESOLVED'}];
+      const timeRangeOptions=[{label:'24 小时',value:'24h'},{label:'7 天',value:'7d'},{label:'30 天',value:'30d'},{label:'全部',value:'all'}];
+      let searchTimer=null;
+
+      // Replay
+      const replay=reactive({alerts:[],index:0,playing:false,speed:1,timer:null});
+      const speedOptions=[{label:'1x',value:1},{label:'2x',value:2},{label:'5x',value:5}];
+      const currentReplay=computed(()=>replay.alerts[replay.index]||null);
+
+      // WebSocket
+      const wsConnected=ref(false);let ws=null,wsReconnectTimer=null;
+
+      // Charts
+      const levelChart=ref(null),moduleChart=ref(null),trendChart=ref(null);
+      let levelChartInst=null,moduleChartInst=null,trendChartInst=null;
+
+      // Table
+      const tableColumns=[
+        {title:'时间',key:'created_at',width:170,ellipsis:{tooltip:true},render:(row)=>row.created_at?new Date(row.created_at+'Z').toLocaleString('zh-CN'):''},
+        {title:'级别',key:'level',width:90,render:(row)=>h('span',{class:'level-tag '+(row.level||'info').toLowerCase()},row.level||'INFO')},
+        {title:'标题',key:'title',ellipsis:{tooltip:true}},
+        {title:'模块',key:'source_module',width:90,render:(row)=>h('span',{style:'font-size:12px;color:var(--muted)'},row.source_module||'system')},
+        {title:'状态',key:'status',width:100,render:(row)=>[h('span',{class:'status-dot '+(row.status||'unread').toLowerCase()}),statusLabel(row.status)]},
+        {title:'操作',key:'actions',width:140,render:(row)=>h('div',{class:'row-actions'},[
+          h('button',{class:'n-button n-button--tiny n-button--quaternary',onClick:(e)=>{e.stopPropagation();ackAlert(row.id)}},'确认'),
+          h('button',{class:'n-button n-button--tiny n-button--quaternary',style:'color:var(--coral)',onClick:(e)=>{e.stopPropagation();deleteAlert(row.id)}},'删除')
+        ])}
+      ];
+      function rowProps(row){return{style:'cursor:pointer',onClick:()=>selectAlert(row)}}
+      function statusLabel(s){const m={UNREAD:'未确认',READ:'已读',ACKNOWLEDGED:'已确认',RESOLVED:'已解决'};return m[s]||s||'未确认'}
+
+      // Theme
+      const theme={common:{primaryColor:'#18d4c3',primaryColorHover:'#43e4d5',primaryColorPressed:'#11aa9e',borderRadius:'6px',bodyColor:'#05080d',cardColor:'#0b1119',modalColor:'#0b1119',popoverColor:'#101923',textColorBase:'#eef6ff'},Button:{borderRadiusMedium:'6px'},Input:{borderRadius:'6px'},Select:{peers:{InternalSelection:{borderRadius:'6px'}}}};
+
+      // Crypto helpers
+      function toB64(buf){return btoa(String.fromCharCode(...new Uint8Array(buf)))}
+      function fromB64(s){return Uint8Array.from(atob(s),c=>c.charCodeAt(0))}
+      async function aesKey(){if(!subtle)return null;if(!aesKeyPromise){const m=await subtle.importKey('raw',enc.encode('IRV-auth-local-demo-secret'),'PBKDF2',false,['deriveKey']);aesKeyPromise=subtle.deriveKey({name:'PBKDF2',salt:enc.encode('IRV-privacy-salt-v1'),iterations:120000,hash:'SHA-256'},m,{name:'AES-GCM',length:256},false,['encrypt','decrypt'])}return aesKeyPromise}
+      async function readSecure(k,fallback){const r=localStorage.getItem(k);if(!r)return fallback;try{const b=JSON.parse(r);if(b?.alg==='AES-GCM'){const key=await aesKey();if(!key)return fallback;const p=await subtle.decrypt({name:'AES-GCM',iv:fromB64(b.iv)},key,fromB64(b.data));return JSON.parse(dec.decode(p))}return b}catch{return fallback}}
+      async function writeSecure(k,v){const key=await aesKey();if(!key){localStorage.setItem(k,JSON.stringify(v));return}const iv=crypto.getRandomValues(new Uint8Array(12)),d=await subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(JSON.stringify(v)));localStorage.setItem(k,JSON.stringify({alg:'AES-GCM',iv:toB64(iv),data:toB64(d)}))}
+      async function api(url,opt={}){const h={...(opt.headers||{})};if(authToken.value)h.Authorization=`Bearer ${authToken.value}`;const r=await fetch(url,{...opt,headers:h}),t=await r.text();let d=null;try{d=t?JSON.parse(t):null}catch{d={raw:t}}if(!r.ok)throw{status:r.status,data:d};return d}
+      async function finishServerAuth(r){const data=r?.data||{},user=data.user||{};sessionUser.value={username:user.username,displayName:user.displayName||user.username,role:user.role||auth.role};authToken.value=data.token||'';isAuthed.value=true;await writeSecure('irv-session',{user:sessionUser.value,token:authToken.value,ts:Date.now()});nextTick(()=>{icons();drawAllCharts();loadStats();loadAlerts();connectWS()})}
+
+      // Auth actions
+      function switchMode(m){auth.mode=m;auth.error='';icons()}
+      function chooseRole(v){auth.role=v;if(v==='admin'){auth.username='admin';auth.password='123456'}else{auth.username='driver';auth.password='123456'}auth.error='';icons()}
+      function fillDemo(){chooseRole(auth.role);icons()}
+      async function submitAuth(){auth.loading=true;auth.error='';try{if(auth.mode==='register'){if(!auth.username.trim()||!auth.password){auth.error='请输入账号和密码';return}if(auth.password!==auth.confirm){auth.error='两次输入的密码不一致';return}const r=await api('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:auth.username.trim(),password:auth.password,displayName:auth.displayName.trim(),role:auth.role})});await finishServerAuth(r);return}const r=await api('/api/auth/login/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:auth.username.trim(),password:auth.password})});await finishServerAuth(r)}catch(e){auth.error=e.data?.detail||e.message||'认证失败'}finally{auth.loading=false}}
+      function logout(){disconnectWS();localStorage.removeItem('irv-session');isAuthed.value=false;sessionUser.value=null;authToken.value='';auth.mode='login';fillDemo();icons()}
+
+      // API calls
+      function getTimeRangeParams(){
+        const now=new Date();
+        switch(filters.timeRange){
+          case '24h':return{start_time:new Date(now-86400000).toISOString()};
+          case '7d':return{start_time:new Date(now-604800000).toISOString()};
+          case '30d':return{start_time:new Date(now-2592000000).toISOString()};
+          default:return{};
+        }
+      }
+      async function loadAlerts(page=pagination.page){
+        tableLoading.value=true;
+        try{
+          const params=new URLSearchParams({page:String(page||pagination.page),page_size:String(pagination.pageSize)});
+          if(filters.level)params.set('level',filters.level);
+          if(filters.status)params.set('status',filters.status);
+          if(filters.search)params.set('search',filters.search);
+          const tr=getTimeRangeParams();
+          if(tr.start_time)params.set('start_time',tr.start_time);
+          if(tr.end_time)params.set('end_time',tr.end_time);
+          const r=await api(`/api/alerts?${params}`);
+          const items=Array.isArray(r.data)?r.data:(r.data?.items||[]);
+          alerts.value=items;alertTotal.value=r.data?.total||r.total||items.length;
+        }catch{alerts.value=[]}finally{tableLoading.value=false}
+      }
+      async function loadStats(){
+        try{const r=await api(`/api/alerts/stats?trend_hours=${trendHours.value}`);Object.assign(stats,r.data||r)}catch{}
+        drawAllCharts();
+      }
+      async function selectAlert(row){
+        try{selectedAlert.value=await api(`/api/alerts/${row.id}`);selectedAlert.value=selectedAlert.value.data||selectedAlert.value}catch{selectedAlert.value=row}
+      }
+      async function ackAlert(id){
+        try{await api(`/api/alerts/${id}/acknowledge`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ack_user:sessionUser.value?.username||'admin'})});message.success('已确认');loadAlerts();if(selectedAlert.value?.id===id)selectAlert({id})}catch{message.error('确认失败')}
+      }
+      async function unackAlert(id){try{await api(`/api/alerts/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'UNREAD'})});message.success('已撤销确认');loadAlerts();if(selectedAlert.value?.id===id)selectAlert({id})}catch{message.error('操作失败')}}
+      async function resolveAlert(id){
+        try{await api(`/api/alerts/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'RESOLVED'})});message.success('已标记为已解决');loadAlerts();if(selectedAlert.value?.id===id)selectAlert({id})}catch{message.error('操作失败')}
+      }
+      async function deleteAlert(id){
+        try{await api(`/api/alerts/${id}`,{method:'DELETE'});message.success('已删除');if(selectedAlert.value?.id===id)selectedAlert.value=null;loadAlerts()}catch{message.error('删除失败')}
+      }
+      async function loadReplayData(){
+        try{const params=new URLSearchParams({page_size:'200',page:'1'});const tr=getTimeRangeParams();if(tr.start_time)params.set('start_time',tr.start_time);const r=await api(`/api/alerts?${params}`);const items=Array.isArray(r.data)?r.data:(r.data?.items||[]);replay.alerts=items.reverse();replay.index=0}catch{message.error('加载回放数据失败')}
+      }
+
+      // Filter handlers
+      function onFilterChange(){if(searchTimer)clearTimeout(searchTimer);searchTimer=setTimeout(()=>{pagination.page=1;loadAlerts()},300)}
+      function onTimeRangeChange(){pagination.page=1;loadAlerts();loadReplayData()}
+      function onPageSizeChange(){pagination.page=1;loadAlerts()}
+
+      // Replay controls
+      function replayToggle(){if(replay.playing){clearInterval(replay.timer);replay.playing=false}else{replay.playing=true;replay.timer=setInterval(()=>{if(replay.index<replay.alerts.length-1)replay.index++;else{replay.index=0;clearInterval(replay.timer);replay.playing=false}},2000/replay.speed)}}
+      function replayStep(d){replay.index=Math.max(0,Math.min(replay.alerts.length-1,replay.index+d))}
+      function replayGo(i){replay.index=i}
+
+      // WebSocket
+      function connectWS(){disconnectWS();const p=location.protocol==='https:'?'wss:':'ws:';ws=new WebSocket(`${p}//${location.host}/ws/alerts`);ws.onopen=()=>{wsConnected.value=true};ws.onmessage=e=>{try{const d=JSON.parse(e.data);if(d.id){alerts.value.unshift(d);alertTotal.value++;if(d.level==='ERROR')stats.error_count++;if(d.level==='CRITICAL')stats.critical_count++;if(alerts.value.length>50)alerts.value.pop();drawAllCharts()}}catch{}};ws.onclose=()=>{wsConnected.value=false;wsReconnectTimer=setTimeout(connectWS,5000)};ws.onerror=()=>{ws?.close()}}
+      function disconnectWS(){if(wsReconnectTimer){clearTimeout(wsReconnectTimer);wsReconnectTimer=null}if(ws){ws.onclose=null;ws.close();ws=null}wsConnected.value=false}
+
+      // Charts
+      function drawAllCharts(){nextTick(()=>{
+        if(levelChart.value){const w=levelChart.value.offsetWidth;if(w>0){if(levelChartInst)levelChartInst.dispose();levelChartInst=echarts.init(levelChart.value);const bl=stats.by_level||{};levelChartInst.setOption({tooltip:{trigger:'axis'},grid:{left:40,right:16,top:16,bottom:28},xAxis:{type:'category',data:['WARNING','ERROR','CRITICAL']},yAxis:{type:'value',minInterval:1},series:[{type:'bar',data:[bl.WARNING||0,bl.ERROR||0,bl.CRITICAL||0],itemStyle:{borderRadius:[6,6,0,0],color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#18d4c3'},{offset:1,color:'#0a6b63'}])}}]})}}
+        if(moduleChart.value){const w=moduleChart.value.offsetWidth;if(w>0){if(moduleChartInst)moduleChartInst.dispose();moduleChartInst=echarts.init(moduleChart.value);const bm=stats.by_module||{};const d=Object.entries(bm).map(([n,c])=>({name:n,value:c})).sort((a,b)=>b.value-a.value);moduleChartInst.setOption({tooltip:{trigger:'item'},legend:{bottom:0,textStyle:{color:'#8290a3',fontSize:11}},series:[{type:'pie',radius:['50%','74%'],center:['50%','44%'],data:d.length?d:[{name:'暂无数据',value:1}],color:['#18d4c3','#4d8dff','#f3b64b','#ff655d','#a78bfa','#34d399']}]})}}
+        if(trendChart.value){const w=trendChart.value.offsetWidth;if(w>0){if(trendChartInst)trendChartInst.dispose();trendChartInst=echarts.init(trendChart.value);const t=stats.trend||[];trendChartInst.setOption({tooltip:{trigger:'axis'},grid:{left:40,right:16,top:16,bottom:28},xAxis:{type:'category',data:t.map(i=>new Date(i.hour+'Z').toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})),axisLabel:{fontSize:10}},yAxis:{type:'value',minInterval:1},series:[{type:'line',data:t.map(i=>i.count),smooth:true,areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(24,212,195,.22)'},{offset:1,color:'rgba(24,212,195,.02)'}])},lineStyle:{color:'#18d4c3',width:2},itemStyle:{color:'#18d4c3'},symbol:'circle',symbolSize:3}]})}}
+      })}
+
+      // Icons & lifecycle
+      function icons(){nextTick(()=>window.lucide?.createIcons())}
+      watch(trendHours,()=>loadStats());
+      watch(()=>replay.speed,(v)=>{if(replay.playing){clearInterval(replay.timer);replay.timer=setInterval(()=>{if(replay.index<replay.alerts.length-1)replay.index++;else{clearInterval(replay.timer);replay.playing=false}},2000/v)}});
+      onMounted(async()=>{
+        const saved=await readSecure('irv-session',null);
+        if(saved?.user){sessionUser.value=saved.user;authToken.value=saved.token||'';isAuthed.value=true}
+        icons();
+        if(isAuthed.value){await Promise.all([loadStats(),loadAlerts()]);connectWS()}
+        addEventListener('resize',()=>{levelChartInst?.resize();moduleChartInst?.resize();trendChartInst?.resize()})
+      });
+      onBeforeUnmount(()=>{disconnectWS();if(searchTimer)clearTimeout(searchTimer);if(replay.timer)clearInterval(replay.timer)});
+
+      // Simple h() helper for JSX-like table renders
+      function h(tag,props,...children){return{tag,props:props||{},children:children.flat()}}
+
+      return{darkTheme,isAuthed,sessionUser,auth,stats,trendHours,trendOptions,alerts,alertTotal,selectedAlert,tableLoading,filters,levelOptions,statusOptions,timeRangeOptions,pagination,replay,speedOptions,currentReplay,wsConnected,levelChart,moduleChart,trendChart,tableColumns,theme,switchMode,chooseRole,fillDemo,submitAuth,logout,loadAlerts,loadStats,selectAlert,ackAlert,unackAlert,resolveAlert,deleteAlert,loadReplayData,onFilterChange,onTimeRangeChange,onPageSizeChange,rowProps,statusLabel,replayToggle,replayStep,replayGo,icons}
+    }}).use(naive).mount('#app');
+  </script>
+</body>
+</html>
