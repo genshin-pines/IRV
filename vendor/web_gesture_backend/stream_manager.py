@@ -37,13 +37,14 @@ BITRATE = "2M"
 
 
 class StreamManager:
-    def __init__(self, src_url=None, dst_path="gesture", use_webcam=False, camera_index=0, mirror=False):
+    def __init__(self, src_url=None, dst_path="gesture", use_webcam=False, camera_index=0, mirror=False, user_id=None):
         self.src_url = src_url
         self.dst_path = dst_path
         self.dst_url = f"rtsp://127.0.0.1:8554/{dst_path}"
         self.use_webcam = use_webcam
         self.camera_index = camera_index
         self.mirror = mirror
+        self.user_id = user_id
 
         self.engine = None
         self.cap = None
@@ -53,6 +54,7 @@ class StreamManager:
         self.out_queue = queue.Queue()
         self._error = None
         self._latest_frame = None
+        self._latest_frame_message = None
 
     def start(self):
         if self._running:
@@ -78,7 +80,10 @@ class StreamManager:
 
         trace_path = Path(__file__).resolve().parents[2] / "logs" / "gesture_static_trace.log"
         self.engine = GestureEngine(trace_path=trace_path, reset_trace=True)
-        self.engine.on_frame = lambda d: self.out_queue.put(("frame", d))
+        if self.user_id is not None:
+            from backend.services.custom_gesture_service import resolve_runtime_binding
+            self.engine.custom_action_resolver = lambda gesture: resolve_runtime_binding(self.user_id, gesture)
+        self.engine.on_frame = self._publish_frame
         self.engine.on_action = lambda d: self.out_queue.put(("action", d))
 
         try:
@@ -160,6 +165,14 @@ class StreamManager:
         import copy
         f = self._latest_frame
         return copy.deepcopy(f) if f is not None else None
+
+    def get_latest_frame_message(self):
+        import copy
+        return copy.deepcopy(self._latest_frame_message) if self._latest_frame_message is not None else None
+
+    def _publish_frame(self, data):
+        self._latest_frame_message = data
+        self.out_queue.put(("frame", data))
 
     @property
     def is_running(self):

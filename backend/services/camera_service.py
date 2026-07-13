@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 import sys
 import time
+import threading
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -348,3 +350,87 @@ def mjpeg_generator(camera: dict[str, str], fps: float = 8, width: int = 960, qu
         mark_camera_inactive(camera_id)
         if cap is not None:
             cap.release()
+
+
+class LatestFrameCapture:
+    """Continuously drain a live stream so preview clients never wait for old frames."""
+
+    def __init__(self, source_url: str):
+        self.source_url = source_url
+        self._condition = threading.Condition()
+        self._latest_frame: np.ndarray | None = None
+        self._sequence = 0
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._cap: cv2.VideoCapture | None = None
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._run, name="mobile-preview-capture", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while self._running:
+            cap = open_capture(self.source_url)
+            self._cap = cap
+            if not cap.isOpened():
+                cap.release()
+                self._cap = None
+                time.sleep(0.5)
+                continue
+            while self._running:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                with self._condition:
+                    self._latest_frame = frame
+                    self._sequence += 1
+                    self._condition.notify_all()
+            cap.release()
+            self._cap = None
+            if self._running:
+                time.sleep(0.2)
+
+    def latest(self, after_sequence: int, timeout: float = 1.0) -> tuple[int, np.ndarray | None]:
+        deadline = time.perf_counter() + timeout
+        with self._condition:
+            while self._running and self._sequence <= after_sequence:
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    break
+                self._condition.wait(remaining)
+            if self._sequence <= after_sequence or self._latest_frame is None:
+                return after_sequence, None
+            return self._sequence, self._latest_frame.copy()
+
+    def stop(self) -> None:
+        self._running = False
+        with self._condition:
+            self._condition.notify_all()
+        if self._cap is not None:
+            self._cap.release()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1)
+        self._thread = None
+
+
+def latest_mjpeg_generator(camera: dict[str, str], fps: float = 12, width: int = 960, quality: int = 72):
+    """MJPEG response that sends only newly captured frames instead of buffered video."""
+    delay = 1.0 / max(fps, 0.1)
+    boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+    capture = LatestFrameCapture(camera["rtsp_url"])
+    sequence = 0
+    try:
+        capture.start()
+        while True:
+            started = time.perf_counter()
+            sequence, frame = capture.latest(sequence, timeout=1.0)
+            if frame is None:
+                yield boundary + encode_jpeg(error_frame(f"reconnecting: {camera['name']}"), width, quality) + b"\r\n"
+            else:
+                yield boundary + encode_jpeg(frame, width, quality) + b"\r\n"
+            time.sleep(max(0.0, delay - (time.perf_counter() - started)))
+    finally:
+        capture.stop()

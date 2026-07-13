@@ -23,6 +23,7 @@ OCR_TASK_MAX_AGE_SEC = 1.2
 LOW_TRAFFIC_MAX_VEHICLES = 2
 LOW_TRAFFIC_OCR_COOLDOWN = 0.3
 HIGH_TRAFFIC_OCR_COOLDOWN = 2.0
+MAX_CONSECUTIVE_DECODE_FAILURES = 12
 
 PLATE_COLOR_MAP = {
     -1: "未知",
@@ -130,6 +131,9 @@ class LocalVideoManager:
         self.tracker = VehiclePlateTracker(max_missed=15)
         self.stream_started_at = time.perf_counter()
         self.last_inference_ms = 0.0
+        self.error = ""
+        self.frame_index = 0
+        self.total_frames = 0
         self._latest_frame = None
         self._ocr_queue: queue.Queue = queue.Queue(maxsize=20)
         self._detect_thread = None
@@ -150,7 +154,10 @@ class LocalVideoManager:
 
         self.cap = cap
         self.fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
+        self.total_frames = max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
         self.running = True
+        self.error = ""
+        self.frame_index = 0
         self.tracker = VehiclePlateTracker(max_missed=15)
         self.stream_started_at = time.perf_counter()
         self.last_inference_ms = 0.0
@@ -169,10 +176,24 @@ class LocalVideoManager:
     def read_frame(self):
         if not self.cap or not self.running:
             return None, [], 0.0
-        ok, frame = self.cap.read()
-        if not ok or frame is None:
+        frame = None
+        for _ in range(MAX_CONSECUTIVE_DECODE_FAILURES):
+            previous_position = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+            ok, candidate = self.cap.read()
+            if ok and candidate is not None:
+                frame = candidate
+                break
+            current_position = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+            if self.total_frames and current_position >= self.total_frames - 1:
+                self.running = False
+                return None, [], 0.0
+            # Some damaged H.264 streams do not advance after a failed decode.
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, max(current_position, previous_position + 1))
+        if frame is None:
+            self.error = f"视频连续 {MAX_CONSECUTIVE_DECODE_FAILURES} 帧解码失败，请尝试重新编码为 H.264 MP4"
             self.running = False
             return None, [], 0.0
+        self.frame_index += 1
         self._latest_frame = frame.copy()
 
         timestamp = round(time.perf_counter() - self.stream_started_at, 2)

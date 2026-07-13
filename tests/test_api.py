@@ -10,6 +10,19 @@ def test_health():
     assert response.json()["ok"] is True
 
 
+def test_driver_can_open_custom_gesture_settings_and_catalog():
+    with TestClient(app) as client:
+        page = client.get("/gesture-settings")
+        assert page.status_code == 200
+
+        login = client.post("/api/auth/login/password", json={"username": "driver", "password": "123456"})
+        assert login.status_code == 200
+        token = login.json()["data"]["token"]
+        catalog = client.get("/api/gesture-custom/catalog", headers={"Authorization": f"Bearer {token}"})
+        assert catalog.status_code == 200
+        assert catalog.json()["data"]["actions"]
+
+
 def test_simulate_logs():
     with TestClient(app) as client:
         response = client.post("/api/logs/simulate", json={"scenario": "camera_disconnect", "count": 1})

@@ -30,7 +30,7 @@ from backend.config import (
 )
 from backend.database import init_db
 from backend.middleware.logging_mw import RequestLoggingMiddleware
-from backend.routers import alerts_router, auth_router, cameras_router, gesture_router, music_router, plate_router, preferences_router, traffic_police_router, ws_manager
+from backend.routers import alerts_router, auth_router, cameras_router, custom_gestures_router, gesture_router, mobile_camera_router, music_router, plate_router, preferences_router, traffic_police_router, ws_manager
 from backend.services.log_service import setup_log_collector
 
 FRONTEND_DIR = PROJECT_DIR / "frontend"
@@ -110,8 +110,10 @@ app.include_router(alerts_router)
 app.include_router(music_router)
 app.include_router(preferences_router)
 app.include_router(auth_router)
+app.include_router(custom_gestures_router)
 app.include_router(plate_router)
 app.include_router(gesture_router)
+app.include_router(mobile_camera_router)
 app.include_router(traffic_police_router)
 app.include_router(cameras_router)
 
@@ -133,6 +135,14 @@ def alerts_page():
     if alerts_file.exists():
         return HTMLResponse(alerts_file.read_text(encoding="utf-8"))
     return HTMLResponse("<h1>Alerts page not found</h1>", status_code=404)
+
+
+@app.get("/gesture-settings", response_class=HTMLResponse)
+def gesture_settings():
+    settings_file = FRONTEND_DIR / "gesture-settings.html"
+    if settings_file.exists():
+        return HTMLResponse(settings_file.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Gesture settings page is unavailable</h1>", status_code=404)
 
 
 @app.get("/api/health")

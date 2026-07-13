@@ -1,5 +1,6 @@
 param(
-  [int]$Port = 8000
+  [int]$Port = 8000,
+  [switch]$Reload
 )
 
 $ErrorActionPreference = "Stop"
@@ -7,9 +8,10 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 Write-Host "[IRV] Working directory: $PSScriptRoot"
-
 # ── 虚拟环境 ──────────────────────────────────────────
-if (!(Test-Path ".\.venv\Scripts\python.exe")) {
+$venvPython = ".\.venv\Scripts\python.exe"
+
+if (!(Test-Path $venvPython)) {
   Write-Host "[IRV] Creating virtual environment..."
   python -m venv .venv
   # 强制安装（首次创建）
@@ -25,24 +27,24 @@ if (!(Test-Path ".\.venv\Scripts\python.exe")) {
 # ── 依赖安装（仅在 requirements.txt 变更时执行）──────
 if ($forceInstall) {
   Write-Host "[IRV] Upgrading pip..."
-  & ".\.venv\Scripts\python.exe" -m pip install --upgrade pip --quiet
+  & $venvPython -m pip install --upgrade pip --quiet
 
   Write-Host "[IRV] Installing requirements..."
-  & ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt --quiet
+  & $venvPython -m pip install -r requirements.txt --quiet
 
   # hyperlpr3 may pull in the CPU onnxruntime package and overwrite DirectML's
   # shared module. Repair that conflict only when the GPU provider is missing.
-  $onnxProviders = & ".\.venv\Scripts\python.exe" -c "import onnxruntime as ort; print(','.join(ort.get_available_providers()))"
+  $onnxProviders = & $venvPython -c "import onnxruntime as ort; print(','.join(ort.get_available_providers()))"
   if ($onnxProviders -notmatch "DmlExecutionProvider") {
     Write-Host "[IRV] Repairing ONNX Runtime DirectML provider..."
-    & ".\.venv\Scripts\python.exe" -m pip uninstall -y onnxruntime --quiet
-    & ".\.venv\Scripts\python.exe" -m pip install --force-reinstall --no-deps onnxruntime-directml==1.24.4 --quiet
+    & $venvPython -m pip uninstall -y onnxruntime --quiet
+    & $venvPython -m pip install --force-reinstall --no-deps onnxruntime-directml==1.24.4 --quiet
   }
 
-  $torchCudaReady = & ".\.venv\Scripts\python.exe" -c "import torch; print('yes' if torch.cuda.is_available() else 'no')"
+  $torchCudaReady = & $venvPython -c "import torch; print('yes' if torch.cuda.is_available() else 'no')"
   if ((Get-Command nvidia-smi -ErrorAction SilentlyContinue) -and $torchCudaReady -ne "yes") {
     Write-Host "[IRV] Installing CUDA 12.6 PyTorch for traffic gesture recognition..."
-    & ".\.venv\Scripts\python.exe" -m pip install --force-reinstall --no-deps torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126 --quiet
+    & $venvPython -m pip install --force-reinstall --no-deps torch==2.13.0+cu126 torchvision==0.28.0+cu126 --index-url https://download.pytorch.org/whl/cu126 --quiet
   }
 
   # 写入 hash 标记，下次启动跳过安装
@@ -90,4 +92,9 @@ if (Test-IrvHealth -CheckPort $Port) {
 
 Write-Host "[IRV] Starting backend: http://127.0.0.1:$Port"
 Write-Host "[IRV] Swagger:          http://127.0.0.1:$Port/docs"
-& ".\.venv\Scripts\python.exe" -m uvicorn backend.main:app --host 127.0.0.1 --port $Port --reload
+if ($Reload) {
+  Write-Host "[IRV] Development reload enabled. Avoid uploading videos while code is reloading."
+  & $venvPython -m uvicorn backend.main:app --host 127.0.0.1 --port $Port --reload
+} else {
+  & $venvPython -m uvicorn backend.main:app --host 127.0.0.1 --port $Port
+}

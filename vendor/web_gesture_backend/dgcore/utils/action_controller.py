@@ -30,9 +30,9 @@ class Deque:
         self.right_swipe_alias_gestures = (
             self.right_swipe_start_alias_gestures | self.right_swipe_end_alias_gestures
         )
-        self.right_swipe_alias_distance = 0.45
-        self.right_swipe_alias_axis_ratio = 1.2
-        self.right_swipe_alias_min_frames = 4
+        self.right_swipe_alias_distance = 0.30
+        self.right_swipe_alias_axis_ratio = 0.8
+        self.right_swipe_alias_min_frames = 3
         self.three_gun_smooth_window = 6
         self.three_gun_smooth_min_frames = 3
         self._gesture_raw_history = deque(maxlen=self.three_gun_smooth_window)
@@ -161,8 +161,6 @@ class Deque:
                 self.action = Event.SWIPE_RIGHT
                 self.clear()
                 return True
-            else:
-                self.clear()
 
         elif x.position == HandPosition.UP_END and HandPosition.DOWN_START in self:
             start_index = self.index_position(HandPosition.DOWN_START)
