@@ -188,10 +188,10 @@ class AlertAgent:
         return AlertCreate(
             level=result.level,
             title=result.title,
-            summary=llm_summary or fallback,
+            summary=fallback,
             source_module=result.source_module,
             raw_log=raw_log,
-            llm_summary=llm_summary,
+            llm_summary=llm_summary if ai_generated else "",
             ai_generated=ai_generated,
             status=AlertStatus.UNREAD,
         )

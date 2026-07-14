@@ -129,13 +129,6 @@ def index():
     return HTMLResponse("<h1>IRV Backend</h1><p>Open <a href='/docs'>/docs</a></p>")
 
 
-@app.get("/alerts", response_class=HTMLResponse)
-def alerts_page():
-    alerts_file = FRONTEND_DIR / "alerts.html"
-    if alerts_file.exists():
-        return HTMLResponse(alerts_file.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>Alerts page not found</h1>", status_code=404)
-
 
 @app.get("/gesture-settings", response_class=HTMLResponse)
 def gesture_settings():
