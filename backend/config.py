@@ -18,16 +18,17 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 AGENT_POLL_INTERVAL_SEC = int(os.getenv("AGENT_POLL_INTERVAL_SEC", "3"))
 LOG_COLLECTOR_CAPACITY = int(os.getenv("LOG_COLLECTOR_CAPACITY", "2000"))
 CAMERA_HEALTH_CHECK_INTERVAL_SEC = float(os.getenv("CAMERA_HEALTH_CHECK_INTERVAL_SEC", "30"))
-CAMERA_HEALTH_FAIL_THRESHOLD = int(os.getenv("CAMERA_HEALTH_FAIL_THRESHOLD", "3"))
+CAMERA_HEALTH_FAIL_THRESHOLD = int(os.getenv("CAMERA_HEALTH_FAIL_THRESHOLD", "5"))
 CAMERA_HEALTH_PROBE_TIMEOUT_SEC = float(os.getenv("CAMERA_HEALTH_PROBE_TIMEOUT_SEC", "10"))
 
 # ── LLM 通用配置（支持任何 OpenAI 兼容接口） ──────────
-# 通用变量（LLM_API_KEY / LLM_BASE_URL）优先，兼容旧版 DEEPSEEK_* 变量
+# 在 .env 中设置 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL 即可切换厂商
+# 兼容旧版变量：DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL（优先级低于 LLM_* 变量）
 LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("DEEPSEEK_API_KEY", ""))
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"))
-LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("DEEPSEEK_BASE_URL", ""))
+LLM_MODEL = os.getenv("LLM_MODEL", "")
 LLM_TIMEOUT_SEC = float(os.getenv("LLM_TIMEOUT_SEC", "15"))
-# 保留旧版兼容
+# 保留旧版兼容别名（引用已解析的 LLM_* 值）
 DEEPSEEK_API_KEY = LLM_API_KEY
 DEEPSEEK_BASE_URL = LLM_BASE_URL
 

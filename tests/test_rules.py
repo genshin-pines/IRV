@@ -14,8 +14,16 @@ def test_plate_low_conf_rule():
 
 
 def test_camera_disconnect_rule():
-    logs = [{"module": "camera", "message": "Broken pipe", "level": "ERROR"}]
+    # 需 ≥2 条 ERROR 日志才触发（防沙盘流瞬时抖动）
+    logs = [
+        {"module": "camera", "message": "Broken pipe", "level": "ERROR"},
+        {"module": "camera", "message": "Camera timeout", "level": "ERROR"},
+    ]
     assert "摄像头连接中断" in _titles(logs)
+
+    # 单条不触发
+    single = [{"module": "camera", "message": "Broken pipe", "level": "ERROR"}]
+    assert "摄像头连接中断" not in _titles(single)
 
 
 def test_gesture_jitter_rule():
@@ -45,6 +53,7 @@ def test_login_fail_rule():
 def test_mixed_rule():
     logs = [
         {"module": "camera", "message": "RTSP disconnected", "level": "ERROR"},
+        {"module": "camera", "message": "Camera timeout", "level": "ERROR"},
         {"module": "backend", "message": "LLM request timeout elapsed=9s", "level": "ERROR"},
     ]
     assert "系统存在复合异常" in _titles(logs)

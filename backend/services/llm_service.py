@@ -28,7 +28,7 @@ class LLMService:
                 {"role": "user", "content": SUMMARY_PROMPT.format(logs="\n".join(logs[-20:]))},
             ],
             "temperature": 0.2,
-            "max_tokens": 300,
+            "max_tokens": 500,
         }
         try:
             response = requests.post(

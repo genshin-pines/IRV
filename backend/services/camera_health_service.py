@@ -29,7 +29,7 @@ logger = logging.getLogger("camera_health")
 # ── 状态跟踪 ────────────────────────────────────────────
 
 # 默认：连续 3 次探测失败才判定为真正断联
-_DEFAULT_FAIL_THRESHOLD = 3
+_DEFAULT_FAIL_THRESHOLD = 5
 
 
 class CameraHealthState:

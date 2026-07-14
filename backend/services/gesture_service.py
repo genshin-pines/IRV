@@ -78,8 +78,8 @@ def get_engine():
     from gesture_engine import GestureEngine  # type: ignore
 
     _engine = GestureEngine()
-    _engine.on_frame = lambda data: _set_last_frame(data)
-    _engine.on_action = lambda data: _set_last_action(data)
+    _engine.on_frame = _logged_set_last_frame
+    _engine.on_action = _logged_set_last_action
     return _engine
 
 
@@ -91,6 +91,45 @@ def _set_last_frame(data: dict[str, Any]) -> None:
 def _set_last_action(data: dict[str, Any]) -> None:
     global _last_action_message
     _last_action_message = data
+
+
+def _logged_set_last_frame(data: dict[str, Any]) -> None:
+    """带日志写入的 on_frame 回调，供单帧识别路径的告警消费"""
+    _set_last_frame(data)
+    hands = data.get("hands") or []
+    if not hands:
+        return
+    gestures = [h.get("gesture", "unknown") for h in hands]
+    confidences = [h.get("confidence", 1.0) for h in hands]
+    min_conf = min(confidences)
+    logger.info(
+        "gesture frame: type=%s, hands=%d, min_confidence=%.2f",
+        gestures[0], len(hands), min_conf,
+    )
+    if min_conf < 0.98:
+        logger.warning(
+            "gesture confidence low: min_confidence=%.2f, type=%s",
+            min_conf, gestures[0],
+        )
+
+
+def _logged_set_last_action(data: dict[str, Any]) -> None:
+    """带日志写入的 on_action 回调，供单帧识别路径的告警消费"""
+    _set_last_action(data)
+    gesture_type = str(data.get("gesture_action") or data.get("gesture") or "unknown")
+    action_applied = bool(data.get("action_applied", False))
+    suppress_reason = str(data.get("suppress_reason") or "")
+    hand_id = data.get("hand_id", -1)
+    if action_applied:
+        logger.info(
+            "gesture action: type=%s, hand_id=%s, applied=True",
+            gesture_type, hand_id,
+        )
+    else:
+        logger.info(
+            "gesture action: type=%s, hand_id=%s, applied=False, reason=%s",
+            gesture_type, hand_id, suppress_reason,
+        )
 
 
 def start_gesture_stream(src_url: str | None = None, use_webcam: bool = False, camera_index: int = 0, mirror: bool = False, user_id: int | None = None) -> dict[str, Any]:

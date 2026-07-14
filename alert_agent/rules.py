@@ -33,12 +33,14 @@ def _message(log: dict[str, Any]) -> str:
 class PlateLowConfidenceRule:
     rule_id = "plate_low_conf"
     _LOW_CONF_THRESHOLD = 0.98  # 低于此值视为低置信度
+    _LOOKBACK = 30  # 只看最近 N 条 plate 日志，避免窗口累积导致计数失真
 
     def detect(self, logs: list[dict[str, Any]]) -> RuleResult | None:
+        # 只看最近 _LOOKBACK 条 plate 日志
+        plate_logs = [log for log in logs if log.get("module") == "plate"]
+        recent = plate_logs[-self._LOOKBACK:]
         hits = []
-        for log in logs:
-            if log.get("module") != "plate":
-                continue
+        for log in recent:
             message = _message(log)
             # 匹配 "confidence=0.8500" / "conf: 0.72" / "置信度 0.80" 等格式
             match = re.search(r"(?:confidence|conf|置信度)\D*((?:0(?:\.\d+)?|1(?:\.0+)?))", message, re.I)
@@ -53,7 +55,7 @@ class PlateLowConfidenceRule:
             return RuleResult(
                 self.rule_id,
                 AlertLevel.WARNING,
-                f"车牌识别置信度持续偏低（{len(hits)} 次低置信度命中）",
+                f"车牌识别置信度持续偏低（最近 {self._LOOKBACK} 次中 {len(hits)} 次低置信度）",
                 TEMPLATES["plate"],
                 "plate",
                 hits[:10],  # 只取前 10 条稳定指纹，避免窗口内累积导致反复触发
@@ -64,6 +66,7 @@ class PlateLowConfidenceRule:
 class CameraDisconnectRule:
     rule_id = "camera_disconnect"
     keywords = ("Camera timeout", "RTSP disconnected", "Broken pipe", "Connection refused", "断开", "中断")
+    _MIN_HITS = 2  # 至少 2 条 ERROR 日志才触发，避免沙盘流瞬时抖动误报
 
     def detect(self, logs: list[dict[str, Any]]) -> RuleResult | None:
         hits = [
@@ -73,7 +76,7 @@ class CameraDisconnectRule:
             and log.get("level") in ("ERROR", "CRITICAL")
             and any(key.lower() in _message(log).lower() for key in self.keywords)
         ]
-        if hits:
+        if len(hits) >= self._MIN_HITS:
             return RuleResult(
                 self.rule_id,
                 AlertLevel.ERROR,

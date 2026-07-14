@@ -23,23 +23,29 @@ _DEFAULT_DEBOUNCE_SEC = 15.0
 _ANALYZE_WINDOW = 200
 
 # 按规则差异化冷却（秒）—— 减少同类型告警的重复发送
+# 高频规则（持久性条件、突发性强）给予更长冷却，避免告警风暴
 _RULE_DEBOUNCE: dict[str, float] = {
+    # ── 安全事件 / 快速感知（60s = 1min）──
     "login_fail": 60.0,
     "unauthorized_access": 60.0,
-    "camera_disconnect": 30.0,
-    "plate_pipeline_failure": 30.0,
-    "plate_low_conf": 30.0,
-    "api_timeout": 30.0,
-    "database_exception": 30.0,
-    "network_exception": 30.0,
-    "llm_degradation": 30.0,
-    "fusion_exception": 30.0,
-    "traffic_police_anomaly": 30.0,
-    "driver_assist_risk": 15.0,
-    "gesture_jitter": 15.0,
-    "gesture_low_conf": 15.0,
-    "gesture_false_trigger": 15.0,
-    "mixed": 60.0,
+    "gesture_jitter": 60.0,
+    "plate_low_conf": 60.0,
+    # ── 持久性故障（300s = 5min）──
+    "camera_disconnect": 300.0,
+    "gesture_false_trigger": 300.0,
+    "network_exception": 300.0,
+    "llm_degradation": 300.0,
+    # ── 复合告警（600s = 10min）──
+    "mixed": 600.0,
+    # ── 半持久性（180s = 3min）──
+    "api_timeout": 180.0,
+    # ── 管线/组件故障（120s = 2min）──
+    "plate_pipeline_failure": 120.0,
+    "database_exception": 120.0,
+    "fusion_exception": 120.0,
+    "traffic_police_anomaly": 120.0,
+    "driver_assist_risk": 120.0,
+    "gesture_low_conf": 120.0,
 }
 
 # 全局限流：每分钟最多发送多少条告警
