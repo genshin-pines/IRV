@@ -8,11 +8,13 @@ upscales those regions, then runs HyperLPR3 on each crop.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 import cv2
 
 
+BASE_DIR = Path(__file__).resolve().parent
 VEHICLE_CLASS_IDS = [2, 3, 5, 7]  # car, motorcycle, bus, truck in COCO
 DEFAULT_VEHICLE_MODEL = "yolov8s.pt"
 PROVINCES = set("京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼")
@@ -20,11 +22,17 @@ SPECIAL_PLATE_PREFIXES = ("使", "领", "警", "学", "港", "澳")
 _vehicle_models = {}
 
 
+def vehicle_class_filter(model_path: str = DEFAULT_VEHICLE_MODEL):
+    """COCO models need vehicle class ids; custom sandbox models use class 0."""
+    return None if "yolo26n_clean20" in str(model_path) else VEHICLE_CLASS_IDS
+
+
 @dataclass(frozen=True)
 class Region:
     source: str
     bbox: tuple[int, int, int, int]
     vehicle_confidence: float | None = None
+    vehicle_label: str | None = None
 
 
 def get_vehicle_model(model_path: str = DEFAULT_VEHICLE_MODEL):
@@ -32,7 +40,9 @@ def get_vehicle_model(model_path: str = DEFAULT_VEHICLE_MODEL):
     if model_path not in _vehicle_models:
         from ultralytics import YOLO
 
-        _vehicle_models[model_path] = YOLO(model_path)
+        path = Path(model_path)
+        model_arg = str(path if path.is_absolute() else BASE_DIR / path)
+        _vehicle_models[model_path] = YOLO(model_arg)
     return _vehicle_models[model_path]
 
 
@@ -69,7 +79,7 @@ def detect_vehicle_regions(
     model = get_vehicle_model(model_path)
     predictions = model.predict(
         image,
-        classes=VEHICLE_CLASS_IDS,
+        classes=vehicle_class_filter(model_path),
         conf=conf,
         imgsz=imgsz,
         verbose=False,

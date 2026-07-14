@@ -33,6 +33,9 @@ screenshot_*.jpg
 test_images/*.jpg
 test_images/*.png
 bench_yolo.py
+cv_modules/hyperlpr_demo/training_license_plate/
+cv_modules/hyperlpr_demo/vehicle_gallery_crops/
+cv_modules/hyperlpr_demo/vehicle_gallery_embeddings*.npz
 
 # 外部工具二进制
 tools/

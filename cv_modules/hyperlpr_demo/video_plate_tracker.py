@@ -71,10 +71,13 @@ class VehicleTrack:
     first_time: float = 0.0
     last_time: float = 0.0
     last_bbox: tuple[int, int, int, int] = (0, 0, 0, 0)
+    vehicle_label: str = "vehicle"
     missed: int = 0
     plate_code: str | None = None
     plate_conf: float = 0.0
     plate_type: int = -1
+    plate_bbox: tuple[int, int, int, int] | None = None
+    plate_anchor_bbox: tuple[int, int, int, int] | None = None
     ocr_candidates: list[dict] = field(default_factory=list)
     last_ocr_at: float = -999.0
     hits: int = 1
@@ -120,12 +123,14 @@ class VehiclePlateTracker:
                         first_time=timestamp,
                         last_time=timestamp,
                         last_bbox=bbox,
+                        vehicle_label=getattr(region, "vehicle_label", None) or "vehicle",
                     )
                     self.next_id += 1
                     self.tracks.append(track)
                 else:
                     track.last_time = timestamp
                     track.last_bbox = bbox
+                    track.vehicle_label = getattr(region, "vehicle_label", None) or track.vehicle_label
                     track.missed = 0
                     track.hits += 1
 
@@ -163,6 +168,7 @@ class VehiclePlateTracker:
         timestamp: float = 0,
         *,
         task_bbox=None,
+        plate_bbox=None,
         task_timestamp: float | None = None,
         max_task_age: float | None = None,
         min_bind_iou: float = 0.05,
@@ -188,10 +194,14 @@ class VehiclePlateTracker:
                         "plate_code": plate_code,
                         "confidence": confidence,
                         "time_sec": timestamp,
+                        "bbox": list(plate_bbox) if plate_bbox else None,
                     })
                     # 多数投票
                     track.plate_code, track.plate_conf = self._vote(track.ocr_candidates)
                     track.plate_type = plate_type
+                    if plate_bbox:
+                        track.plate_bbox = normalize_bbox(plate_bbox)
+                        track.plate_anchor_bbox = task_bbox or track.last_bbox
                     return
 
     def cancel_ocr(self, track_id: int, timestamp: float = 0):
@@ -257,6 +267,9 @@ class VehiclePlateTracker:
                 track.ocr_candidates.append(item)
                 track.plate_code, track.plate_conf = self._vote(track.ocr_candidates)
                 track.plate_type = item.get("plate_type", -1)
+                if item.get("bbox"):
+                    track.plate_bbox = normalize_bbox(item["bbox"])
+                    track.plate_anchor_bbox = track.last_bbox
 
     def final_results(self) -> list[dict]:
         """兼容旧接口：按轨迹聚合候选，输出稳定车牌结果。"""
@@ -355,9 +368,12 @@ class VehiclePlateTracker:
                 results.append({
                     "track_id": t.track_id,
                     "bbox": list(t.last_bbox),
+                    "vehicle_label": t.vehicle_label,
                     "plate_code": t.plate_code or "",
                     "plate_conf": t.plate_conf,
                     "plate_type": t.plate_type,
+                    "plate_bbox": list(t.plate_bbox) if t.plate_bbox else None,
+                    "plate_anchor_bbox": list(t.plate_anchor_bbox) if t.plate_anchor_bbox else None,
                 })
             return sorted(results, key=lambda t: t["track_id"])
 
