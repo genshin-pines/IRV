@@ -11,7 +11,7 @@ from typing import Any, Callable
 from backend.config import LOG_FILE, LOG_LEVEL, LOG_COLLECTOR_CAPACITY
 
 
-LOG_SOURCES = {"plate", "gesture", "camera", "backend", "auth", "login", "llm", "traffic_police", "fusion", "operation", "system"}
+LOG_SOURCES = {"plate", "gesture", "camera", "backend", "auth", "login", "llm", "traffic_police", "fusion", "operation", "system", "mobile"}
 logger = logging.getLogger("alert_agent")
 
 
@@ -148,6 +148,7 @@ def normalize_module(name: str) -> str:
         "fusion_agent": "fusion",
         "traffic_police": "traffic_police",
         "operation": "operation",
+        "mobile": "mobile",
     }
     for key, value in aliases.items():
         if key in lowered:

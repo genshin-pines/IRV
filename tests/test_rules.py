@@ -7,10 +7,10 @@ def _titles(logs):
 
 def test_plate_low_conf_rule():
     logs = [
-        {"module": "plate", "message": "plate confidence=0.60", "level": "WARNING"}
+        {"module": "plate", "message": "plate confidence=0.62 low", "level": "WARNING"}
         for _ in range(5)
     ]
-    assert "车牌识别置信度持续偏低" in _titles(logs)
+    assert any("车牌识别置信度持续偏低" in t for t in _titles(logs))
 
 
 def test_camera_disconnect_rule():

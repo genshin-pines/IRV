@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -7,7 +8,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 import cv2
 
+from backend.services.log_service import write_log
 
+
+logger = logging.getLogger("mobile_camera")
 _ALLOWED_SCHEMES = {"rtsp", "rtmp", "http", "https"}
 _LOCK = threading.Lock()
 _SOURCE_URL = ""
@@ -52,9 +56,13 @@ def probe_source(source_url: str, timeout_seconds: float = 5.0) -> dict:
         )
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not cap.isOpened():
+            write_log("mobile", "ERROR",
+                       f"mobile camera connection refused: cannot open source url={redact_source_url(source_url)}")
             raise ValueError("无法打开手机视频源")
         ok, frame = cap.read()
         if not ok or frame is None:
+            write_log("mobile", "ERROR",
+                       f"mobile camera stream unreachable: no frame returned url={redact_source_url(source_url)}")
             raise ValueError("手机视频源未返回画面")
         return {
             "source_url": redact_source_url(source_url),
@@ -65,6 +73,8 @@ def probe_source(source_url: str, timeout_seconds: float = 5.0) -> dict:
     except ValueError:
         raise
     except Exception as exc:
+        write_log("mobile", "ERROR",
+                   f"mobile camera network error: {type(exc).__name__} {exc} url={redact_source_url(source_url)}")
         raise ValueError("手机视频源探测失败") from exc
     finally:
         if cap is not None:
@@ -129,6 +139,7 @@ def report_stream_error(message: str) -> None:
     global _LAST_ERROR
     with _LOCK:
         _LAST_ERROR = message
+    write_log("mobile", "ERROR", f"mobile camera stream error: {message}")
 
 
 def status() -> dict:
