@@ -215,7 +215,6 @@ def api_simulate_logs(payload: SimulateRequest):
         ],
         "database_exception": [("system", "ERROR", "database error: OperationalError disk full")],
         "traffic_police_anomaly": [("traffic_police", "ERROR", "交警手势模型加载失败: torch unavailable")],
-        "unauthorized_access": [("auth", "WARNING", "token auth failed reason=signature_mismatch")],
         "network_exception": [("system", "ERROR", "connection refused: ECONNREFUSED 127.0.0.1:5432")],
         "driver_assist_risk": [("system", "WARNING", "driver assist scene=traffic_police camera=live1 name=桥面")],
     }

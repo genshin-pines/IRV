@@ -27,7 +27,6 @@ _ANALYZE_WINDOW = 200
 _RULE_DEBOUNCE: dict[str, float] = {
     # ── 安全事件 / 快速感知（60s = 1min）──
     "login_fail": 60.0,
-    "unauthorized_access": 60.0,
     "gesture_jitter": 60.0,
     "plate_low_conf": 60.0,
     # ── 持久性故障（300s = 5min）──

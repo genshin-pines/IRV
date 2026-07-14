@@ -94,37 +94,6 @@ def test_llm_rate_limit():
 
 
 # ═══════════════════════════════════════════════════════════════
-# UnauthorizedAccessRule — 未授权 API 访问
-# ═══════════════════════════════════════════════════════════════
-
-def test_unauthorized_access_triggered():
-    """1 次 token 校验失败即触发"""
-    logs = [
-        {"module": "auth", "level": "WARNING",
-         "message": "token auth failed reason=signature_mismatch"}
-    ]
-    assert "unauthorized_access" in _ids(logs)
-
-
-def test_unauthorized_parse_error():
-    """token 格式损坏也算"""
-    logs = [
-        {"module": "auth", "level": "WARNING",
-         "message": "token auth failed reason=parse_error"}
-    ]
-    assert "unauthorized_access" in _ids(logs)
-
-
-def test_unauthorized_below_threshold():
-    """无 token auth failed 日志 → 不触发"""
-    logs = [
-        {"module": "auth", "level": "INFO",
-         "message": "login success user=admin"}
-    ]
-    assert "unauthorized_access" not in _ids(logs)
-
-
-# ═══════════════════════════════════════════════════════════════
 # TrafficPoliceAnomalyRule — 交警手势异常
 # ═══════════════════════════════════════════════════════════════
 

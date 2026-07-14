@@ -168,19 +168,28 @@ class LoginFailRule:
 class DriverAssistRiskRule:
     rule_id = "driver_assist_risk"
 
+    _SCENE_VALUES = {"near_collision", "traffic_police", "camera_disconnect"}
+
     def detect(self, logs: list[dict[str, Any]]) -> RuleResult | None:
         hits = []
         level = AlertLevel.WARNING
         for log in logs:
+            # 只扫描 camera / system 模块的驾驶辅助日志
+            if log.get("module") not in {"camera", "system"}:
+                continue
             message = _message(log)
             lower = message.lower()
             if "driver assist scene=" not in lower:
                 continue
-            if "near_collision" in lower:
+            # 提取 scene= 后的值，做精确匹配
+            import re
+            m = re.search(r"driver assist scene=(\w+)", lower)
+            scene = m.group(1) if m else ""
+            if scene not in self._SCENE_VALUES:
+                continue
+            if scene == "near_collision":
                 level = AlertLevel.CRITICAL
-                hits.append(message)
-            elif "traffic_police" in lower or "camera_disconnect" in lower:
-                hits.append(message)
+            hits.append(message)
         if hits:
             title = "车外驾驶辅助风险提示" if level != AlertLevel.CRITICAL else "车外驾驶辅助高风险告警"
             return RuleResult(
@@ -417,18 +426,24 @@ class TrafficPoliceAnomalyRule:
     """交警手势识别异常 — 模型加载失败、流启动失败、置信度持续低"""
     rule_id = "traffic_police_anomaly"
 
+    _ERROR_KW = ("模型加载失败", "流启动失败", "decode failed", "torch unavailable",
+                 "cuda", "gpu", "初始化失败", "引擎创建失败")
+    _WARN_KW = ("confidence=", "置信度低", "置信度偏低")
+
     def detect(self, logs: list[dict[str, Any]]) -> RuleResult | None:
         error_hits = [
             _message(log)
             for log in logs
             if log.get("module") == "traffic_police"
             and log.get("level") in ("ERROR", "CRITICAL")
+            and any(kw in _message(log).lower() for kw in self._ERROR_KW)
         ]
         warn_hits = [
             _message(log)
             for log in logs
             if log.get("module") == "traffic_police"
             and log.get("level") == "WARNING"
+            and any(kw in _message(log).lower() for kw in self._WARN_KW)
         ]
         if error_hits:
             return RuleResult(
@@ -447,30 +462,6 @@ class TrafficPoliceAnomalyRule:
                 TEMPLATES["traffic_police"],
                 "traffic_police",
                 warn_hits,
-            )
-        return None
-
-
-class UnauthorizedAccessRule:
-    """未授权 API 访问 — token 校验失败"""
-    rule_id = "unauthorized_access"
-
-    def detect(self, logs: list[dict[str, Any]]) -> RuleResult | None:
-        hits = [
-            _message(log)
-            for log in logs
-            if log.get("module") == "auth"
-            and log.get("level") == "WARNING"
-            and "token auth failed" in _message(log).lower()
-        ]
-        if len(hits) >= 1:
-            return RuleResult(
-                self.rule_id,
-                AlertLevel.WARNING,
-                f"存在未授权 API 访问尝试（{len(hits)} 次 token 校验失败）",
-                TEMPLATES["unauthorized"],
-                "auth",
-                hits,
             )
         return None
 
@@ -522,7 +513,6 @@ class RuleEngine:
             GestureLowConfidenceRule(),
             GestureFalseTriggerRule(),
             DatabaseExceptionRule(),
-            UnauthorizedAccessRule(),
             TrafficPoliceAnomalyRule(),
             NetworkExceptionRule(),
         ]

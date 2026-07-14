@@ -145,6 +145,7 @@ def normalize_module(name: str) -> str:
         "api": "backend",
         "backend": "backend",
         "llm": "llm",
+        "fusion": "fusion",
         "fusion_agent": "fusion",
         "traffic_police": "traffic_police",
         "operation": "operation",
