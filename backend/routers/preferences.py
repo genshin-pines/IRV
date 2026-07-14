@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from backend.config import AUTH_SECRET_KEY
 from backend.database import get_db
 from backend.models.auth_user import AuthUser
+from backend.services.log_service import write_log
 from backend.services.preference_service import batch_set_preferences, delete_preference, get_all_preferences, get_preference, set_preference
 
 
@@ -50,8 +51,10 @@ def get_current_user_id(authorization: str | None = Header(default=None), db: Se
                     user = db.scalar(select(AuthUser).where(AuthUser.username == username))
                     if user:
                         return user.id
+            else:
+                write_log("auth", "WARNING", "token auth failed reason=signature_mismatch")
         except Exception:
-            pass
+            write_log("auth", "WARNING", "token auth failed reason=parse_error")
     # Demo fallback: return user_id=1 (the default driver account)
     return 1
 

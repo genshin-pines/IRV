@@ -20,7 +20,14 @@ if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
 from alert_agent.scheduler import agent_status, start_scheduler, stop_scheduler
-from backend.config import EVENT_BUS_WINDOW_SECONDS, FUSION_DEDUP_MS, FUSION_LLM_ENABLED
+from backend.config import (
+    CAMERA_HEALTH_CHECK_INTERVAL_SEC,
+    CAMERA_HEALTH_FAIL_THRESHOLD,
+    CAMERA_HEALTH_PROBE_TIMEOUT_SEC,
+    EVENT_BUS_WINDOW_SECONDS,
+    FUSION_DEDUP_MS,
+    FUSION_LLM_ENABLED,
+)
 from backend.database import init_db
 from backend.middleware.logging_mw import RequestLoggingMiddleware
 from backend.routers import alerts_router, auth_router, cameras_router, custom_gestures_router, gesture_router, mobile_camera_router, music_router, plate_router, preferences_router, traffic_police_router, ws_manager
@@ -42,7 +49,16 @@ async def lifespan(app: FastAPI):
         window_seconds=EVENT_BUS_WINDOW_SECONDS,
         dedup_ms=FUSION_DEDUP_MS,
     )
+    # 启动摄像头健康检查
+    from backend.services.camera_health_service import start_health_checker
+    await start_health_checker(
+        CAMERA_HEALTH_CHECK_INTERVAL_SEC,
+        fail_threshold=CAMERA_HEALTH_FAIL_THRESHOLD,
+        probe_timeout_sec=CAMERA_HEALTH_PROBE_TIMEOUT_SEC,
+    )
     yield
+    from backend.services.camera_health_service import stop_health_checker
+    await stop_health_checker()
     from backend.services.alert_service import stop_fusion_engine
     await stop_fusion_engine()
     await stop_scheduler()
@@ -113,12 +129,28 @@ def index():
     return HTMLResponse("<h1>IRV Backend</h1><p>Open <a href='/docs'>/docs</a></p>")
 
 
+@app.get("/alerts", response_class=HTMLResponse)
+def alerts_page():
+    alerts_file = FRONTEND_DIR / "alerts.html"
+    if alerts_file.exists():
+        return HTMLResponse(alerts_file.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Alerts page not found</h1>", status_code=404)
+
+
 @app.get("/gesture-settings", response_class=HTMLResponse)
 def gesture_settings():
     settings_file = FRONTEND_DIR / "gesture-settings.html"
     if settings_file.exists():
         return HTMLResponse(settings_file.read_text(encoding="utf-8"))
     return HTMLResponse("<h1>Gesture settings page is unavailable</h1>", status_code=404)
+
+
+@app.get("/plate-history", response_class=HTMLResponse)
+def plate_history_page():
+    history_file = FRONTEND_DIR / "plate-history.html"
+    if history_file.exists():
+        return HTMLResponse(history_file.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Plate history page is unavailable</h1>", status_code=404)
 
 
 @app.get("/api/health")
@@ -130,6 +162,12 @@ def health():
         bus = get_event_bus()
         result["fusion_agent"] = fusion.status if fusion else None
         result["event_bus"] = bus.stats if bus else None
+    except Exception:
+        pass
+    # 摄像头健康状态
+    try:
+        from backend.services.camera_health_service import health_status as camera_health
+        result["camera_health"] = camera_health()
     except Exception:
         pass
     result["modules"] = {

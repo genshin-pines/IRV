@@ -10,9 +10,13 @@ from datetime import datetime
 from uuid import uuid4
 
 import cv2
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from backend.database import SessionLocal, get_db
+from backend.services.plate_history_service import list_plate_records, save_plate_records, serialize_plate_record
+from backend.services.log_service import write_log
 from backend.services.plate_service import (
     publish_plate_events,
     recognize_image_bytes,
@@ -35,10 +39,21 @@ class StreamRequest(BaseModel):
     sample_interval: float = Field(0.5, ge=0.1, le=10)
 
 
+async def persist_history(plates: list[dict], *, source: str, source_type: str) -> int:
+    """Keep database I/O outside the async request and WebSocket loops."""
+    def save() -> int:
+        with SessionLocal() as db:
+            return save_plate_records(db, plates, source=source, source_type=source_type)
+    return await asyncio.to_thread(save)
+
+
 @router.post("/recognize-image")
 async def api_recognize_image(file: UploadFile = File(...)):
     try:
-        data = recognize_image_bytes(await file.read(), filename=file.filename or "upload")
+        contents = await file.read()
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, recognize_image_bytes, contents, file.filename or "upload")
+        data["history_saved"] = await persist_history(data.get("plates", []), source=file.filename or "upload", source_type="image")
         await publish_plate_events(data.get("plates", []), camera_id=file.filename or "upload")
         return response(data)
     except Exception as exc:
@@ -48,7 +63,10 @@ async def api_recognize_image(file: UploadFile = File(...)):
 @router.post("/recognize-video")
 async def api_recognize_video(file: UploadFile = File(...), interval: float = Query(0.5, ge=0.1, le=10)):
     try:
-        data = recognize_video_bytes(await file.read(), filename=file.filename or "video", interval=interval)
+        contents = await file.read()
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, recognize_video_bytes, contents, file.filename or "video", interval)
+        data["history_saved"] = await persist_history(data.get("plates", []), source=file.filename or "video", source_type="video")
         await publish_plate_events(data.get("plates", []), camera_id=file.filename or "video")
         return response(data)
     except Exception as exc:
@@ -112,6 +130,7 @@ async def api_local_video_live(ws: WebSocket):
         await asyncio.to_thread(warmup_models)
         await ws.send_json({"type": "status", "stage": "opening", "message": "模型已就绪，正在打开视频"})
         if not manager.open(path):
+            write_log("plate", "ERROR", f"plate video failed: cannot open video filename={path.name}")
             await ws.send_json({"type": "error", "message": "无法打开本地视频"})
             return
 
@@ -140,6 +159,7 @@ async def api_local_video_live(ws: WebSocket):
                             "bbox": plate.get("bbox", []),
                         }
                     )
+            await persist_history(new_plates, source=f"local:{path.name}", source_type="local_video")
             await publish_plate_events(new_plates, camera_id=f"local:{path.name}")
         if manager.error:
             await ws.send_json({"type": "error", "message": manager.error})
@@ -162,8 +182,30 @@ async def api_local_video_live(ws: WebSocket):
 @router.post("/recognize-stream")
 async def api_recognize_stream(payload: StreamRequest):
     try:
-        data = recognize_stream(payload.rtsp_url, payload.duration_sec, payload.sample_interval)
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(None, recognize_stream, payload.rtsp_url, payload.duration_sec, payload.sample_interval)
+        data["history_saved"] = await persist_history(data.get("plates", []), source=payload.rtsp_url, source_type="rtsp")
         await publish_plate_events(data.get("plates", []), camera_id=payload.rtsp_url)
         return response(data)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/history")
+def api_plate_history(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    plate_code: str | None = Query(None),
+    source_type: str | None = Query(None),
+    start_time: datetime | None = Query(None),
+    end_time: datetime | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    items, total = list_plate_records(
+        db, page=page, page_size=page_size, plate_code=plate_code,
+        source_type=source_type, start_time=start_time, end_time=end_time,
+    )
+    return response({
+        "items": [serialize_plate_record(item) for item in items],
+        "total": total, "page": page, "page_size": page_size,
+    })

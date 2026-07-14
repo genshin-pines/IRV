@@ -9,12 +9,15 @@ import cv2
 import numpy as np
 
 from backend.config import CTPGR_REFERENCE_DIR
+from backend.services.log_service import write_log
 
 
 _manager = None
 _engine = None
 _last_error = ""
 _last_frame_message: dict[str, Any] | None = None
+_frame_count = 0
+_LOG_SAMPLE_INTERVAL = 30  # 每 30 帧写一次识别日志
 
 
 TRAFFIC_POLICE_ACTIONS = {
@@ -58,8 +61,18 @@ def is_available() -> tuple[bool, str]:
 
 
 def _set_last_frame(data: dict[str, Any]) -> None:
-    global _last_frame_message
+    global _last_frame_message, _frame_count
     _last_frame_message = data
+    _frame_count += 1
+    if _frame_count % _LOG_SAMPLE_INTERVAL == 0:
+        gesture = (data or {}).get("gesture") or {}
+        gesture_id = int(gesture.get("id") or 0)
+        confidence = float(gesture.get("confidence") or 0.0)
+        _action, label, _advice = TRAFFIC_POLICE_ACTIONS.get(gesture_id, TRAFFIC_POLICE_ACTIONS[0])
+        level = "WARNING" if confidence < 0.98 else "INFO"
+        write_log("traffic_police", level,
+                  f"traffic police gesture frame={_frame_count} id={gesture_id} "
+                  f"label={label} confidence={confidence:.2f}")
 
 
 def get_engine():
@@ -76,6 +89,7 @@ def get_engine():
         return _engine
     except Exception as exc:
         _last_error = str(exc)
+        write_log("traffic_police", "ERROR", f"交警手势模型加载失败: {exc}")
         raise RuntimeError(f"交警手势模型加载失败: {exc}") from exc
 
 
@@ -84,9 +98,20 @@ def recognize_frame_bytes(contents: bytes, filename: str = "frame") -> dict[str,
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if frame is None:
+        write_log("traffic_police", "ERROR", f"traffic police frame failed: image decode failed filename={filename}")
         raise ValueError("无法解析图片")
     _last_frame_message = None
     annotated = get_engine().process(frame)
+    # 记录单帧识别结果
+    frame_data = _last_frame_message
+    gesture = (frame_data or {}).get("gesture") or {}
+    gesture_id = int(gesture.get("id") or 0)
+    confidence = float(gesture.get("confidence") or 0.0)
+    _action, label, _advice = TRAFFIC_POLICE_ACTIONS.get(gesture_id, TRAFFIC_POLICE_ACTIONS[0])
+    level = "WARNING" if confidence < 0.98 else "INFO"
+    write_log("traffic_police", level,
+              f"traffic police recognize-frame filename={filename} id={gesture_id} "
+              f"label={label} confidence={confidence:.2f}")
     return {
         "filename": filename,
         "image_size": f"{frame.shape[1]}x{frame.shape[0]}",
@@ -113,6 +138,7 @@ def start_stream(src_url: str | None = None, use_webcam: bool = False) -> dict[s
         return status()
     except Exception as exc:
         _last_error = str(exc)
+        write_log("traffic_police", "ERROR", f"交警手势流启动失败: {exc}")
         raise RuntimeError(f"交警手势流启动失败: {exc}") from exc
 
 

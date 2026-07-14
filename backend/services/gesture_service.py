@@ -70,6 +70,29 @@ def get_stream_manager_class():
     return StreamManager
 
 
+def list_available_cameras(max_index: int = 10) -> list[dict[str, Any]]:
+    """Probe local camera indexes so the UI never offers unavailable devices."""
+    cameras: list[dict[str, Any]] = []
+    backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+    for index in range(max_index + 1):
+        capture = cv2.VideoCapture(index, backend)
+        try:
+            if not capture.isOpened():
+                continue
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                continue
+            cameras.append({
+                "index": index,
+                "label": f"摄像头 {index}",
+                "width": int(frame.shape[1]),
+                "height": int(frame.shape[0]),
+            })
+        finally:
+            capture.release()
+    return cameras
+
+
 def get_engine():
     global _engine, _last_frame_message, _last_action_message
     if _engine is not None:
@@ -78,8 +101,8 @@ def get_engine():
     from gesture_engine import GestureEngine  # type: ignore
 
     _engine = GestureEngine()
-    _engine.on_frame = lambda data: _set_last_frame(data)
-    _engine.on_action = lambda data: _set_last_action(data)
+    _engine.on_frame = _logged_set_last_frame
+    _engine.on_action = _logged_set_last_action
     return _engine
 
 
@@ -91,6 +114,30 @@ def _set_last_frame(data: dict[str, Any]) -> None:
 def _set_last_action(data: dict[str, Any]) -> None:
     global _last_action_message
     _last_action_message = data
+
+
+def _logged_set_last_frame(data: dict[str, Any]) -> None:
+    """Write single-frame recognition signals into the Agent log stream."""
+    _set_last_frame(data)
+    hands = data.get("hands") or []
+    if not hands:
+        return
+    gestures = [hand.get("gesture", "unknown") for hand in hands]
+    confidences = [hand.get("confidence", 1.0) for hand in hands]
+    min_conf = min(confidences)
+    logger.info("gesture frame: type=%s, hands=%d, min_confidence=%.2f", gestures[0], len(hands), min_conf)
+    if min_conf < 0.98:
+        logger.warning("gesture confidence low: min_confidence=%.2f, type=%s", min_conf, gestures[0])
+
+
+def _logged_set_last_action(data: dict[str, Any]) -> None:
+    """Write recognized actions so Agent rules can diagnose suppressed actions."""
+    _set_last_action(data)
+    gesture_type = str(data.get("gesture_action") or data.get("gesture") or "unknown")
+    action_applied = bool(data.get("action_applied", False))
+    reason = str(data.get("suppress_reason") or "")
+    hand_id = data.get("hand_id", -1)
+    logger.info("gesture action: type=%s, hand_id=%s, applied=%s, reason=%s", gesture_type, hand_id, action_applied, reason)
 
 
 def start_gesture_stream(src_url: str | None = None, use_webcam: bool = False, camera_index: int = 0, mirror: bool = False, user_id: int | None = None) -> dict[str, Any]:

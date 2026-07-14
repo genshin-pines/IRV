@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from backend.services.gesture_service import (
     drain_messages,
     gesture_status,
+    list_available_cameras,
     latest_frame,
     map_event_to_vehicle,
     recognize_frame_bytes,
@@ -53,6 +54,12 @@ def api_start(payload: GestureStartRequest, user: AuthUser = Depends(get_authent
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/cameras")
+def api_list_cameras(user: AuthUser = Depends(get_authenticated_driver)):
+    del user
+    return response(list_available_cameras())
+
+
 @router.post("/stop")
 def api_stop():
     return response(stop_gesture_stream())
@@ -91,7 +98,7 @@ async def api_traffic_police_frame(file: UploadFile = File(...)):
 async def api_gesture_event(event: GestureEvent):
     command = event.command or map_event_to_vehicle(event.model_dump())
     write_log("gesture", "INFO", f"gesture event source={event.source} type={event.gesture_type} confidence={event.confidence} stable={event.stable} command={command}")
-    if event.confidence < 0.75:
+    if event.confidence < 0.98:
         write_log("gesture", "WARNING", f"gesture confidence low source={event.source} type={event.gesture_type} confidence={event.confidence}")
 
     # 推送车主手势到融合引擎（三路感知 EventBus）

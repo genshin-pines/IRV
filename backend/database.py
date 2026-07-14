@@ -20,6 +20,7 @@ def init_db() -> None:
     from backend.models.auth_user import AuthCode, AuthUser  # noqa: F401
     from backend.models.custom_gesture_binding import CustomGestureBinding  # noqa: F401
     from backend.models.music_track import MusicTrack  # noqa: F401
+    from backend.models.plate_record import PlateRecord  # noqa: F401
     from backend.models.user_preference import UserPreference  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

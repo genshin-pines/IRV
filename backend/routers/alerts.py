@@ -17,6 +17,7 @@ from backend.schemas.alerts import (
     AlertList,
     AlertRead,
     AlertStats,
+    AlertUpdate,
     ApiResponse,
     LogList,
     LogRead,
@@ -29,6 +30,7 @@ from backend.services.alert_service import (
     get_alert,
     get_alert_stats,
     list_alerts,
+    update_alert,
 )
 from backend.services.log_service import get_log_stats, query_logs, write_log
 
@@ -77,20 +79,30 @@ def response(data=None, message: str = "success", ok: bool = True) -> dict:
 @router.get("/api/alerts", response_model=ApiResponse[AlertList])
 def api_list_alerts(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=200),
     level: str | None = Query(None),
     status_filter: str | None = Query(None, alias="status"),
     source_module: str | None = Query(None),
+    start_time: datetime | None = Query(None),
+    end_time: datetime | None = Query(None),
+    search: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    items, total = list_alerts(db, page=page, page_size=page_size, level=level, status=status_filter, source_module=source_module)
+    items, total = list_alerts(
+        db, page=page, page_size=page_size, level=level,
+        status=status_filter, source_module=source_module,
+        start_time=start_time, end_time=end_time, search=search,
+    )
     data = AlertList(items=[AlertRead.model_validate(item) for item in items], total=total, page=page, page_size=page_size)
     return response(data)
 
 
 @router.get("/api/alerts/stats", response_model=ApiResponse[AlertStats])
-def api_alert_stats(db: Session = Depends(get_db)):
-    return response(get_alert_stats(db))
+def api_alert_stats(
+    trend_hours: int = Query(4, ge=1, le=168),
+    db: Session = Depends(get_db),
+):
+    return response(get_alert_stats(db, trend_hours=trend_hours))
 
 
 @router.get("/api/alerts/{alert_id}", response_model=ApiResponse[AlertRead])
@@ -114,6 +126,14 @@ def api_delete_alert(alert_id: int, db: Session = Depends(get_db)):
     if not delete_alert(db, alert_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="alert not found")
     return response({"deleted": True})
+
+
+@router.patch("/api/alerts/{alert_id}", response_model=ApiResponse[AlertRead])
+def api_update_alert(alert_id: int, payload: AlertUpdate, db: Session = Depends(get_db)):
+    alert = update_alert(db, alert_id, payload)
+    if alert is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="alert not found")
+    return response(AlertRead.model_validate(alert))
 
 
 # ═══════════════════════════════════════════════════════════

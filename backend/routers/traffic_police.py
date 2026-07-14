@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import sys
 from datetime import datetime
 from uuid import uuid4
 
@@ -56,6 +57,29 @@ class TrafficStartRequest(BaseModel):
 class DriverAssistAnalyzeRequest(BaseModel):
     camera_id: str = "live1"
     scene: str = Field(default="normal", examples=["normal", "traffic_police", "camera_disconnect", "near_collision"])
+
+
+@router.get("/local-camera-preview")
+def api_local_camera_preview(camera_index: int = Query(..., ge=0, le=10)):
+    """Provide an MJPEG preview before the selected camera enters recognition."""
+    def generate():
+        backend = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+        capture = cv2.VideoCapture(camera_index, backend)
+        if not capture.isOpened():
+            logger.warning("computer camera preview unavailable index=%s", camera_index)
+            return
+        try:
+            while True:
+                ok, frame = capture.read()
+                if not ok or frame is None:
+                    break
+                encoded, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 78])
+                if encoded:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
+        finally:
+            capture.release()
+
+    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 @router.get("/status")
@@ -127,7 +151,7 @@ async def api_optimized_live(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as exc:
-        logger.exception("optimized traffic video stream failed")
+        write_log("traffic_police", "ERROR", f"optimized traffic video stream failed: {exc}")
         try:
             await ws.send_json({"type": "error", "message": str(exc)})
         except Exception:
@@ -222,6 +246,7 @@ def api_start(payload: TrafficStartRequest):
     try:
         return response(start_stream(src_url=payload.src_url, use_webcam=payload.use_webcam))
     except Exception as exc:
+        write_log("traffic_police", "ERROR", f"traffic police stream start failed: {exc}")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -242,6 +267,7 @@ async def api_recognize_frame(file: UploadFile = File(...)):
         data["driver_advice"] = summarize_gesture_frame(data.get("frame"))
         return response(data)
     except Exception as exc:
+        write_log("traffic_police", "ERROR", f"traffic police recognize-frame failed: {exc}")
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

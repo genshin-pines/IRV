@@ -243,7 +243,7 @@ class LocalVideoManager:
                 timestamp,
                 min_hits_for_ocr=1 if is_low_traffic else 2,
                 ocr_cooldown=LOW_TRAFFIC_OCR_COOLDOWN if is_low_traffic else HIGH_TRAFFIC_OCR_COOLDOWN,
-                stop_ocr_confidence=0.95,
+                stop_ocr_confidence=0.98,
             )
             for track, bbox in candidates:
                 x1, y1, x2, y2 = map(int, bbox)

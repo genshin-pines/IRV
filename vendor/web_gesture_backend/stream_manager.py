@@ -4,6 +4,7 @@ import time
 import queue
 import shutil
 import subprocess
+import logging
 import threading
 from pathlib import Path
 from typing import Optional
@@ -34,6 +35,7 @@ def find_ffmpeg():
 FFMPEG_BIN = find_ffmpeg()
 FPS = 25
 BITRATE = "2M"
+_log = logging.getLogger("gesture")
 
 
 class StreamManager:
@@ -55,6 +57,11 @@ class StreamManager:
         self._error = None
         self._latest_frame = None
         self._latest_frame_message = None
+        self._frame_count = 0
+        self._recent_actions: list[tuple[float, str, bool]] = []
+        self._last_jitter_warn_at = 0.0
+        self._last_false_trigger_warn_at = 0.0
+        self._last_high_freq_warn_at = 0.0
 
     def start(self):
         if self._running:
@@ -70,6 +77,7 @@ class StreamManager:
 
         if not self.cap.isOpened():
             self._error = f"Cannot open: {self.src_url or 'webcam'}"
+            _log.error("gesture camera open failed: %s", self._error)
             print(f"[StreamManager] {self._error}")
             return
 
@@ -84,7 +92,7 @@ class StreamManager:
             from backend.services.custom_gesture_service import resolve_runtime_binding
             self.engine.custom_action_resolver = lambda gesture: resolve_runtime_binding(self.user_id, gesture)
         self.engine.on_frame = self._publish_frame
-        self.engine.on_action = lambda d: self.out_queue.put(("action", d))
+        self.engine.on_action = self._on_action_logged
 
         try:
             self.ffmpeg_proc = self._start_ffmpeg(width, height)
@@ -96,6 +104,7 @@ class StreamManager:
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        _log.info("gesture stream started: user_id=%s webcam=%s src=%s", self.user_id, self.use_webcam, self.src_url)
         print("[StreamManager] Started")
 
     def stop(self):
@@ -114,11 +123,13 @@ class StreamManager:
                 self.ffmpeg_proc.kill()
             self.ffmpeg_proc = None
         print("[StreamManager] Stopped")
+        _log.info("gesture stream stopped: user_id=%s", self.user_id)
 
     def _loop(self):
         while self._running:
             ret, frame = self.cap.read()
             if not ret:
+                _log.error("gesture frame decode failed: cannot read frame from capture device")
                 time.sleep(1)
                 continue
             if self.mirror:
@@ -126,13 +137,12 @@ class StreamManager:
             try:
                 annotated = self.engine.process_frame(frame)
                 self._latest_frame = annotated
-            except Exception as e:
-                print(f"[StreamManager] Inference error: {e}")
-                continue
+            except Exception as exc:
+                _log.error("gesture inference error: %s", exc)
 
             if self.ffmpeg_proc is None:
                 continue
-            if self.ffmpeg_proc and self.ffmpeg_proc.poll() is None:
+            if self.ffmpeg_proc.poll() is None:
                 try:
                     self.ffmpeg_proc.stdin.write(annotated.tobytes())
                 except (BrokenPipeError, OSError):
@@ -173,6 +183,48 @@ class StreamManager:
     def _publish_frame(self, data):
         self._latest_frame_message = data
         self.out_queue.put(("frame", data))
+        self._frame_count += 1
+        if self._frame_count % 60 != 0:
+            return
+        hands = data.get("hands") or []
+        if not hands:
+            return
+        gestures = [hand.get("gesture", "unknown") for hand in hands]
+        confidences = [hand.get("confidence", 1.0) for hand in hands]
+        min_conf = min(confidences)
+        _log.info("gesture frame: type=%s, hands=%d, min_confidence=%.2f", gestures[0], len(hands), min_conf)
+        if min_conf < 0.98:
+            _log.warning("gesture confidence low: min_confidence=%.2f, type=%s", min_conf, gestures[0])
+
+    def _on_action_logged(self, data: dict) -> None:
+        """Emit only actionable stream anomalies for Alert Agent consumption."""
+        self.out_queue.put(("action", data))
+        gesture_type = str(data.get("gesture_action") or data.get("gesture") or "unknown")
+        action_applied = bool(data.get("action_applied", False))
+        now = time.time()
+        self._recent_actions.append((now, gesture_type, action_applied))
+        if len(self._recent_actions) > 20:
+            self._recent_actions = self._recent_actions[-20:]
+
+        if now - self._last_jitter_warn_at >= 10.0 and len(self._recent_actions) >= 5:
+            recent_types = [item[1] for item in self._recent_actions[-5:]]
+            changes = sum(previous != current for previous, current in zip(recent_types, recent_types[1:]))
+            if changes >= 2:
+                self._last_jitter_warn_at = now
+                _log.warning("gesture jitter detected: recent_actions=%s, changes=%d/4", recent_types, changes)
+
+        if now - self._last_false_trigger_warn_at >= 10.0 and len(self._recent_actions) >= 10:
+            recent = self._recent_actions[-10:]
+            suppressed = sum(1 for _, _, applied in recent if not applied)
+            if suppressed / len(recent) >= 0.5:
+                self._last_false_trigger_warn_at = now
+                _log.warning("gesture false trigger risk: stable=false, suppressed=%d/10", suppressed)
+
+        if now - self._last_high_freq_warn_at >= 10.0:
+            count = sum(1 for timestamp, _, _ in self._recent_actions if now - timestamp <= 10.0)
+            if count >= 8:
+                self._last_high_freq_warn_at = now
+                _log.warning("gesture unstable high frequency: stable=false, action_count=%d in 10s", count)
 
     @property
     def is_running(self):

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>IRV - 车牌识别历史</title>
+  <style>
+    body{margin:0;background:#0b1219;color:#e7edf5;font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif}
+    main{max-width:1100px;margin:auto;padding:32px 18px}h1{margin:0}p{color:#91a0b4}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:24px 0}input,select,button{padding:9px 11px;border:1px solid #314354;border-radius:6px;background:#121d28;color:inherit;font:inherit}button{background:#0f8177;border-color:#0f8177;cursor:pointer}table{width:100%;border-collapse:collapse;background:#121d28;border-radius:8px;overflow:hidden}th,td{padding:11px;text-align:left;border-bottom:1px solid #243443}th{color:#91a0b4;font-size:12px}td{word-break:break-all}.muted{color:#91a0b4}.pager{display:flex;gap:12px;align-items:center;margin-top:16px}@media(max-width:700px){main{padding:22px 12px}table{font-size:12px}th,td{padding:8px 5px}.hide-mobile{display:none}}
+  </style>
+</head>
+<body><main>
+  <h1>车牌识别历史</h1><p>识别成功的图片、视频、本地视频和 RTSP 结果会自动保存，可按车牌或来源筛选。</p>
+  <div class="toolbar"><input id="plate" placeholder="车牌号，例如 京A"><select id="source"><option value="">全部来源</option><option value="image">图片</option><option value="video">上传视频</option><option value="local_video">本地视频</option><option value="rtsp">RTSP</option></select><button id="search">查询</button><button id="reset">重置</button></div>
+  <div id="status" class="muted">正在加载...</div>
+  <table><thead><tr><th>识别时间</th><th>车牌</th><th>颜色</th><th>置信度</th><th class="hide-mobile">来源</th><th>类型</th></tr></thead><tbody id="rows"></tbody></table>
+  <div class="pager"><button id="prev">上一页</button><span id="pageInfo" class="muted"></span><button id="next">下一页</button></div>
+</main><script>
+  let page=1,total=0;const size=20;const $=id=>document.getElementById(id);
+  function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML}
+  async function load(){const q=new URLSearchParams({page,page_size:size});if($('plate').value.trim())q.set('plate_code',$('plate').value.trim());if($('source').value)q.set('source_type',$('source').value);$('status').textContent='正在加载...';try{const r=await fetch('/api/plate/history?'+q);const j=await r.json();if(!r.ok||!j.ok)throw Error(j.detail||j.message||'查询失败');const d=j.data;total=d.total;$('rows').innerHTML=d.items.map(x=>`<tr><td>${esc(new Date(x.recognized_at).toLocaleString('zh-CN'))}</td><td><b>${esc(x.plate_code)}</b></td><td>${esc(x.plate_color)}</td><td>${Math.round(x.confidence*100)}%</td><td class="hide-mobile">${esc(x.source)}</td><td>${esc(x.source_type)}</td></tr>`).join('')||'<tr><td colspan="6" class="muted">暂无识别记录；请先完成一次车牌识别。</td></tr>';$('status').textContent=`共 ${total} 条记录`;$('pageInfo').textContent=`第 ${page} 页 / 共 ${Math.max(1,Math.ceil(total/size))} 页`;$('prev').disabled=page<=1;$('next').disabled=page*size>=total}catch(e){$('status').textContent='加载失败：'+e.message}}
+  $('search').onclick=()=>{page=1;load()};$('reset').onclick=()=>{$('plate').value='';$('source').value='';page=1;load()};$('prev').onclick=()=>{page--;load()};$('next').onclick=()=>{page++;load()};load();
+</script></body></html>
