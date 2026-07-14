@@ -125,7 +125,10 @@ if FRONTEND_DIR.exists():
 def index():
     index_file = FRONTEND_DIR / "index.html"
     if index_file.exists():
-        return HTMLResponse(index_file.read_text(encoding="utf-8"))
+        return HTMLResponse(
+            index_file.read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        )
     return HTMLResponse("<h1>IRV Backend</h1><p>Open <a href='/docs'>/docs</a></p>")
 
 

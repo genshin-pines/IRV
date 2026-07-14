@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -40,7 +41,7 @@ _cached_token: str = ""
 _cached_token_expires_at: float = 0.0
 
 
-def _get_tenant_access_token() -> str:
+async def _get_tenant_access_token() -> str:
     """获取飞书 tenant_access_token（带缓存，有效期约 2h）"""
     global _cached_token, _cached_token_expires_at
 
@@ -49,7 +50,8 @@ def _get_tenant_access_token() -> str:
         return _cached_token
 
     url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-    resp = requests.post(
+    resp = await asyncio.to_thread(
+        requests.post,
         url,
         json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET},
         timeout=10,
@@ -232,7 +234,7 @@ async def send_test_message(message: str = "🧪 飞书通知连通性测试") -
 async def _send_via_app_api(content: Dict) -> bool:
     """通过飞书应用机器人 API 发送卡片消息"""
     try:
-        token = _get_tenant_access_token()
+        token = await _get_tenant_access_token()
         url = "https://open.feishu.cn/open-apis/im/v1/messages"
         params = {"receive_id_type": "chat_id"}
 
@@ -243,7 +245,8 @@ async def _send_via_app_api(content: Dict) -> bool:
             "content": card_json,
         }
 
-        resp = requests.post(
+        resp = await asyncio.to_thread(
+            requests.post,
             url,
             params=params,
             headers={
@@ -270,7 +273,7 @@ async def _send_via_webhook(content: Dict) -> bool:
     """通过飞书自定义机器人 Webhook 发送卡片消息"""
     try:
         body = content
-        resp = requests.post(FEISHU_WEBHOOK_URL, json=body, timeout=10)
+        resp = await asyncio.to_thread(requests.post, FEISHU_WEBHOOK_URL, json=body, timeout=10)
         data = resp.json()
         if data.get("code") == 0 or data.get("StatusCode") == 0:
             logger.info("飞书 Webhook 卡片消息已发送")

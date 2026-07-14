@@ -74,10 +74,11 @@ class OnnxModel(ABC):
         print("Using ONNX Runtime", ort.get_device())
 
         if "DML" in ort.get_device():
-            prov_opts = [{"device_id": 0}]
-            providers.append("DmlExecutionProvider")
+            providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
+            prov_opts = [{"device_id": 0}, {}]
 
         elif "GPU" in ort.get_device():
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
             prov_opts = [
                 {
                     "device_id": 0,
@@ -85,9 +86,9 @@ class OnnxModel(ABC):
                     "gpu_mem_limit": 2 * 1024 * 1024 * 1024,
                     "cudnn_conv_algo_search": "EXHAUSTIVE",
                     "do_copy_in_default_stream": True,
-                }
+                },
+                {},
             ]
-            providers.append("CUDAExecutionProvider")
 
         return options, prov_opts, providers
 
@@ -104,7 +105,6 @@ class HandDetection(OnnxModel):
     def __init__(self, model_path, image_size=(320, 240)):
         super().__init__(model_path, image_size)
         self.image_size = image_size
-        self.sess = ort.InferenceSession(model_path)
         self.input_name = self.sess.get_inputs()[0].name
         self.output_names = [output.name for output in self.sess.get_outputs()]
         

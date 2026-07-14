@@ -82,6 +82,9 @@ class HandInfo:
     gesture_id: int
     center: tuple[float, float]
     confidence: float
+    landmarks: list[dict] = field(default_factory=list)
+    handedness: str = ""
+    landmark_confidence: float = 0.0
 
 
 @dataclass

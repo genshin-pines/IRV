@@ -14,6 +14,7 @@ from backend.services.gesture_service import (
     gesture_status,
     list_available_cameras,
     latest_frame,
+    latest_raw_jpeg,
     map_event_to_vehicle,
     recognize_frame_bytes,
     start_gesture_stream,
@@ -35,6 +36,7 @@ class GestureStartRequest(BaseModel):
     use_webcam: bool = False
     camera_index: int = Field(default=0, ge=0, le=10)
     mirror: bool = False
+    enable_rtsp: bool = True
 
 
 class GestureEvent(BaseModel):
@@ -49,7 +51,14 @@ class GestureEvent(BaseModel):
 @router.post("/start")
 def api_start(payload: GestureStartRequest, user: AuthUser = Depends(get_authenticated_driver)):
     try:
-        return response(start_gesture_stream(src_url=payload.src_url, use_webcam=payload.use_webcam, camera_index=payload.camera_index, mirror=payload.mirror, user_id=user.id))
+        return response(start_gesture_stream(
+            src_url=payload.src_url,
+            use_webcam=payload.use_webcam,
+            camera_index=payload.camera_index,
+            mirror=payload.mirror,
+            user_id=user.id,
+            enable_rtsp=payload.enable_rtsp,
+        ))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -122,17 +131,26 @@ async def api_gesture_event(event: GestureEvent):
 
 
 @router.get("/video-feed")
-def api_video_feed():
+def api_video_feed(raw: bool = Query(False)):
     async def generate():
         while True:
-            frame = latest_frame()
-            if frame is not None:
-                ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                if ok:
-                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
+            if raw:
+                jpeg = latest_raw_jpeg()
+                if jpeg is not None:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n"
+            else:
+                frame = latest_frame()
+                if frame is not None:
+                    ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    if ok:
+                        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
             await asyncio.sleep(0.04)
 
-    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
+    return StreamingResponse(
+        generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.websocket("/ws")

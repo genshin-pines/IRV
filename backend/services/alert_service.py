@@ -224,7 +224,7 @@ async def setup_fusion_engine(
                 alert = AlertEvent(
                     level=str(alert_data.get("level", "WARNING")).upper(),
                     title=str(alert_data.get("title", "融合告警")),
-                    summary=result.reasoning or "",
+                    summary=result.scene_summary or "",
                     detail=json.dumps(result.alerts, ensure_ascii=False),
                     source_module="fusion",
                     raw_log=result.scene_summary or "",

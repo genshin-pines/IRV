@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from dgcore.main_controller import MainController
 from dgcore.utils import targets, Event, Drawer
 
+from hand_landmark_detector import HAND_CONNECTIONS, HandLandmarkDetector
 from models import HandInfo, FrameMessage, make_action_message, make_custom_action_message, to_dict
 
 
@@ -27,6 +28,9 @@ class GestureEngine:
         print(f'[GestureEngine] classifier: {classifier_path}')
         self._init_trace(reset_trace=reset_trace)
         self.controller = MainController(detector_path, classifier_path)
+        self.landmark_detector = HandLandmarkDetector(base / "hand_landmarker.task")
+        if self.landmark_detector.enabled:
+            print("[GestureEngine] sparse MediaPipe hand overlay enabled")
 
         self.on_action = None
         self.on_frame = None
@@ -92,13 +96,14 @@ class GestureEngine:
             print(f"[GestureEngine] trace action failed: {exc}")
             self.trace_path = None
 
-    def process_frame(self, frame):
+    def process_frame(self, frame, render=True):
         self._frame_index += 1
         now = time.time()
         self._fps = 0.9 * self._fps + 0.1 / max(now - self._last_time, 0.001)
         self._last_time = now
 
         bboxes, ids, labels = self.controller(frame)
+        landmark_detections = self.landmark_detector.process(frame, self._frame_index)
 
         hands = []
         if bboxes is not None and len(bboxes) > 0:
@@ -114,6 +119,8 @@ class GestureEngine:
                     center=(float((box[0] + box[2]) / 2), float((box[1] + box[3]) / 2)),
                     confidence=1.0,
                 ))
+
+        self._attach_landmarks(hands, landmark_detections)
 
         self._trace_frame(now, hands)
         if self.on_frame:
@@ -189,18 +196,85 @@ class GestureEngine:
         if count_of_zoom == 2:
             self.drawer.draw_two_hands(frame, thumb_boxes)
 
+        if not render:
+            return None
+
         annotated = frame.copy()
         for hand in hands:
             b = hand.bbox
             cv2.rectangle(annotated, (b[0], b[1]), (b[2], b[3]), (255, 255, 0), 3)
             cv2.putText(annotated, f'ID{hand.hand_id}:{hand.gesture}',
                         (b[0], b[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            self._draw_landmarks(annotated, hand)
 
         cv2.putText(annotated, f'FPS:{self._fps:.1f}', (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
 
         annotated = self.drawer.draw(annotated)
         return annotated
+
+    def close(self):
+        self.landmark_detector.close()
+
+    @staticmethod
+    def _bbox_iou(first, second):
+        left = max(first[0], second[0])
+        top = max(first[1], second[1])
+        right = min(first[2], second[2])
+        bottom = min(first[3], second[3])
+        intersection = max(0, right - left) * max(0, bottom - top)
+        first_area = max(0, first[2] - first[0]) * max(0, first[3] - first[1])
+        second_area = max(0, second[2] - second[0]) * max(0, second[3] - second[1])
+        union = first_area + second_area - intersection
+        return intersection / union if union > 0 else 0.0
+
+    def _attach_landmarks(self, hands, detections):
+        """Greedily match MediaPipe hands to the legacy tracked hand boxes."""
+        unmatched = set(range(len(detections)))
+        for hand in hands:
+            best_index = None
+            best_score = float("-inf")
+            for index in unmatched:
+                detection = detections[index]
+                box = detection["bbox"]
+                center_x = (box[0] + box[2]) / 2
+                center_y = (box[1] + box[3]) / 2
+                distance = ((center_x - hand.center[0]) ** 2 + (center_y - hand.center[1]) ** 2) ** 0.5
+                score = self._bbox_iou(hand.bbox, box) * 1000.0 - distance
+                if score > best_score:
+                    best_score = score
+                    best_index = index
+
+            if best_index is None:
+                continue
+            detection = detections[best_index]
+            # Reject unrelated detections when the two detectors disagree strongly.
+            box = detection["bbox"]
+            center_x = (box[0] + box[2]) / 2
+            center_y = (box[1] + box[3]) / 2
+            max_distance = max(hand.bbox[2] - hand.bbox[0], hand.bbox[3] - hand.bbox[1]) * 1.5
+            distance = ((center_x - hand.center[0]) ** 2 + (center_y - hand.center[1]) ** 2) ** 0.5
+            if self._bbox_iou(hand.bbox, box) <= 0 and distance > max(40.0, max_distance):
+                continue
+            unmatched.remove(best_index)
+            hand.landmarks = detection["landmarks"]
+            hand.handedness = detection["handedness"]
+            hand.landmark_confidence = round(detection["confidence"], 4)
+
+    @staticmethod
+    def _draw_landmarks(frame, hand):
+        if not hand.landmarks:
+            return
+        points = {
+            int(point.get("index", index)): (int(point["x"]), int(point["y"]))
+            for index, point in enumerate(hand.landmarks)
+        }
+        for start, end in HAND_CONNECTIONS:
+            if start in points and end in points:
+                cv2.line(frame, points[start], points[end], (0, 220, 255), 2, cv2.LINE_AA)
+        for index, point in points.items():
+            color = (0, 0, 255) if index == 0 else (50, 255, 50)
+            cv2.circle(frame, point, 4, color, -1, cv2.LINE_AA)
 
     def _business_vertical_alias_actions(self, hands):
         """Complete the point/one alias groups for vertical-swipe business events."""

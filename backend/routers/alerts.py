@@ -178,7 +178,7 @@ async def api_test_notification(msg: str = "🧪 IRV 告警系统 — 飞书通�
 # ═══════════════════════════════════════════════════════════
 
 @router.post("/api/logs/simulate", response_model=ApiResponse[dict])
-def api_simulate_logs(payload: SimulateRequest):
+async def api_simulate_logs(payload: SimulateRequest):
     scenarios = {
         "plate_low_conf": [("plate", "WARNING", "plate confidence=0.62 low")],
         "camera_disconnect": [("camera", "ERROR", "RTSP disconnected Camera timeout")],
@@ -191,10 +191,36 @@ def api_simulate_logs(payload: SimulateRequest):
         ],
         "api_timeout": [("backend", "ERROR", "LLM request timeout elapsed=9s")],
         "login_fail": [("login", "WARNING", "login fail user=admin ip=192.168.1.50")],
+        "plate_pipeline_failure": [("plate", "ERROR", "plate recognition failed: image decode failed filename=cam.jpg")],
+        "llm_degradation": [("llm", "WARNING", "LLM downgraded, status=401")],
+        "fusion_exception": [("fusion", "ERROR", "融合推理异常: callback timeout")],
+        "gesture_low_conf": [
+            ("gesture", "WARNING", "gesture confidence low source=driver confidence=0.60"),
+            ("gesture", "WARNING", "gesture confidence low source=driver confidence=0.55"),
+        ],
+        "gesture_false_trigger": [
+            ("gesture", "INFO", "gesture event source=driver type=palm_open confidence=0.90 stable=false"),
+            ("gesture", "INFO", "gesture event source=driver type=fist confidence=0.92 stable=true"),
+            ("gesture", "INFO", "gesture event source=driver type=swipe_left confidence=0.88 stable=false"),
+            ("gesture", "INFO", "gesture event source=driver type=swipe_right confidence=0.91 stable=true"),
+            ("gesture", "INFO", "gesture event source=driver type=open_palm confidence=0.85 stable=false"),
+            ("gesture", "INFO", "gesture event source=driver type=grab confidence=0.93 stable=true"),
+            ("gesture", "INFO", "gesture event source=driver type=swipe_up confidence=0.87 stable=false"),
+            ("gesture", "INFO", "gesture event source=driver type=swipe_down confidence=0.94 stable=true"),
+            ("gesture", "INFO", "gesture event source=driver type=peace confidence=0.89 stable=true"),
+            ("gesture", "INFO", "gesture event source=driver type=thumbs_up confidence=0.86 stable=true"),
+        ],
+        "database_exception": [("system", "ERROR", "database error: OperationalError disk full")],
+        "traffic_police_anomaly": [("traffic_police", "ERROR", "交警手势模型加载失败: torch unavailable")],
+        "network_exception": [("system", "ERROR", "connection refused: ECONNREFUSED 127.0.0.1:5432")],
+        "driver_assist_risk": [("system", "WARNING", "driver assist scene=traffic_police camera=live1 name=桥面")],
     }
     if payload.scenario == "mixed":
         entries = []
-        for key in ("plate_low_conf", "camera_disconnect", "api_timeout", "login_fail"):
+        for key in (
+            "plate_low_conf", "camera_disconnect", "api_timeout", "login_fail",
+            "plate_pipeline_failure", "llm_degradation", "fusion_exception",
+        ):
             entries.extend(scenarios[key])
     else:
         entries = scenarios.get(payload.scenario)
@@ -206,6 +232,14 @@ def api_simulate_logs(payload: SimulateRequest):
         source, level, message = entries[index % len(entries)]
         write_log(source, level, message)
         written += 1
+
+    from alert_agent.scheduler import _agent
+
+    if _agent is not None:
+        try:
+            await _agent.trigger()
+        except Exception:
+            logger.exception("simulate: agent trigger failed")
     return response({"scenario": payload.scenario, "count": written})
 
 

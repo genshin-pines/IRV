@@ -140,15 +140,30 @@ def _logged_set_last_action(data: dict[str, Any]) -> None:
     logger.info("gesture action: type=%s, hand_id=%s, applied=%s, reason=%s", gesture_type, hand_id, action_applied, reason)
 
 
-def start_gesture_stream(src_url: str | None = None, use_webcam: bool = False, camera_index: int = 0, mirror: bool = False, user_id: int | None = None) -> dict[str, Any]:
+def start_gesture_stream(src_url: str | None = None, use_webcam: bool = False, camera_index: int = 0, mirror: bool = False, user_id: int | None = None, enable_rtsp: bool = True) -> dict[str, Any]:
     global _manager
     StreamManager = get_stream_manager_class()
     if _manager and _manager.is_running:
         _manager.stop()
-    _manager = StreamManager(src_url=src_url, use_webcam=use_webcam, camera_index=camera_index, mirror=mirror, user_id=user_id)
+    _manager = StreamManager(
+        src_url=src_url,
+        use_webcam=use_webcam,
+        camera_index=camera_index,
+        mirror=mirror,
+        user_id=user_id,
+        enable_rtsp=enable_rtsp,
+    )
     _manager.start()
     if not _manager.is_running:
         raise RuntimeError(_manager.error or "无法启动手势视频流")
+    deadline = time.time() + 3.0
+    while _manager.get_latest_raw_jpeg() is None and time.time() < deadline:
+        time.sleep(0.03)
+    if _manager.get_latest_raw_jpeg() is None:
+        error = _manager.error or "摄像头已打开，但未读取到有效画面"
+        _manager.stop()
+        _manager = None
+        raise RuntimeError(error)
     logger.info("gesture stream started: user_id=%s webcam=%s camera_index=%s mirror=%s src=%s", user_id, use_webcam, camera_index, mirror, src_url)
     return gesture_status()
 
@@ -165,11 +180,12 @@ def stop_gesture_stream() -> dict[str, Any]:
 def gesture_status() -> dict[str, Any]:
     if not _manager:
         return {"running": False, "mjpg_url": "/api/gesture/video-feed", "hls_url": None, "rtsp_url": None}
+    raw_web_mode = not _manager.enable_rtsp
     return {
         "running": bool(_manager.is_running),
-        "mjpg_url": "/api/gesture/video-feed",
+        "mjpg_url": "/api/gesture/video-feed?raw=1" if raw_web_mode else "/api/gesture/video-feed",
         "hls_url": _manager.hls_url,
-        "rtsp_url": _manager.dst_url,
+        "rtsp_url": _manager.dst_url if _manager.enable_rtsp else None,
         "error": _manager.error,
     }
 
@@ -178,6 +194,12 @@ def latest_frame():
     if not _manager or not _manager.is_running:
         return None
     return _manager.get_latest_frame()
+
+
+def latest_raw_jpeg():
+    if not _manager or not _manager.is_running:
+        return None
+    return _manager.get_latest_raw_jpeg()
 
 
 def latest_recognition(user_id: int | None = None) -> dict[str, Any] | None:

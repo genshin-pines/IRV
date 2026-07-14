@@ -1,10 +1,15 @@
 ﻿from collections.abc import Generator
+import logging
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from backend.config import DATABASE_URL
+from backend.services.log_service import write_log
 
+
+logger = logging.getLogger("backend.database")
 
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args, pool_pre_ping=True)
@@ -23,7 +28,12 @@ def init_db() -> None:
     from backend.models.plate_record import PlateRecord  # noqa: F401
     from backend.models.user_preference import UserPreference  # noqa: F401
 
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except SQLAlchemyError as exc:
+        logger.error("database init failed: %s", exc)
+        write_log("system", "ERROR", f"database init failed: OperationalError {exc}")
+        raise
     _ensure_alert_columns_for_sqlite()
 
 
@@ -31,6 +41,11 @@ def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
         yield db
+    except SQLAlchemyError as exc:
+        logger.error("database session error: %s", exc)
+        write_log("system", "ERROR", f"database session error: OperationalError {exc}")
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -50,7 +65,12 @@ def _ensure_alert_columns_for_sqlite() -> None:
         "ack_time": "DATETIME",
         "ack_user": "VARCHAR(128)",
     }
-    with engine.begin() as conn:
-        for name, ddl_type in expected.items():
-            if name not in existing:
-                conn.execute(text(f"ALTER TABLE alert_events ADD COLUMN {name} {ddl_type}"))
+    try:
+        with engine.begin() as conn:
+            for name, ddl_type in expected.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE alert_events ADD COLUMN {name} {ddl_type}"))
+    except SQLAlchemyError as exc:
+        logger.error("database migration failed: %s", exc)
+        write_log("system", "ERROR", f"database migration failed: OperationalError {exc}")
+        raise

@@ -94,6 +94,7 @@ $requiredModules = @(
   "dotenv",
   "requests",
   "cv2",
+  "mediapipe",
   "numpy",
   "onnxruntime",
   "ultralytics",
@@ -182,6 +183,7 @@ Write-Host "[IRV] Dependency check passed. ONNX providers: $onnxProviders"
 
 Write-Host "[IRV] Checking required model files..."
 $requiredModelFiles = @(
+  "vendor\web_gesture_backend\dgcore\models\hand_landmarker.task",
   "vendor\optimized_traffic\ctpgr\checkpoints\pose_model.pt",
   "vendor\optimized_traffic\models\gesture_bilstm_multi_video.pt"
 )

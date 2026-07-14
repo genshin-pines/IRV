@@ -150,21 +150,21 @@ def test_traffic_police_stream_start_failed():
 
 
 def test_traffic_police_low_confidence():
-    """≥3 条低置信度 WARNING → 触发"""
+    """≥2 条低置信度 WARNING → 触发"""
     logs = [
         {"module": "traffic_police", "level": "WARNING",
          "message": "traffic police gesture frame=30 id=0 label=无手势 confidence=0.45"}
-        for _ in range(3)
+        for _ in range(2)
     ]
     assert "traffic_police_anomaly" in _ids(logs)
 
 
 def test_traffic_police_low_confidence_below_threshold():
-    """＜3 条低置信度 → 不触发"""
+    """1 条低置信度 → 不触发"""
     logs = [
         {"module": "traffic_police", "level": "WARNING",
          "message": "traffic police gesture frame=30 id=0 label=无手势 confidence=0.45"}
-        for _ in range(2)
+        for _ in range(1)
     ]
     assert "traffic_police_anomaly" not in _ids(logs)
 
@@ -197,10 +197,10 @@ def test_gesture_low_confidence_still_works():
 # ═══════════════════════════════════════════════════════════════
 
 def test_gesture_false_trigger():
-    """最近 20 条中 12 条 stable=false（60%）→ 触发"""
+    """最近 10 条中 4 条 stable=false（40%）→ 触发"""
     logs = []
-    for i in range(20):
-        stable = "false" if i < 12 else "true"
+    for i in range(10):
+        stable = "false" if i < 4 else "true"
         logs.append({
             "module": "gesture", "level": "INFO",
             "message": f"gesture event source=driver type=palm_open confidence=0.90 stable={stable} command=volume_up",
@@ -209,10 +209,10 @@ def test_gesture_false_trigger():
 
 
 def test_gesture_false_trigger_below_threshold():
-    """最近 20 条中 8 条 stable=false（40%）→ 不触发"""
+    """最近 10 条中 2 条 stable=false（20%）→ 不触发"""
     logs = []
-    for i in range(20):
-        stable = "false" if i < 8 else "true"
+    for i in range(10):
+        stable = "false" if i < 2 else "true"
         logs.append({
             "module": "gesture", "level": "INFO",
             "message": f"gesture event source=driver type=palm_open confidence=0.90 stable={stable} command=volume_up",
@@ -221,10 +221,10 @@ def test_gesture_false_trigger_below_threshold():
 
 
 def test_gesture_false_trigger_not_enough_logs():
-    """不足 20 条 → 不触发"""
+    """不足 10 条 → 不触发"""
     logs = [
         {"module": "gesture", "level": "INFO",
          "message": "gesture event source=driver type=palm_open confidence=0.90 stable=false command=volume_up"}
-        for _ in range(10)
+        for _ in range(8)
     ]
     assert "gesture_false_trigger" not in _ids(logs)

@@ -6,6 +6,7 @@ IRV 是一个面向沙盘/车载交互演示的多模块视觉系统，整合了
 
 - 管理者端：查看沙盘摄像头视频流、抽帧识别车牌、生成并查看 Agent 告警。
 - 车主端手势控车：已接入本机摄像头和外部 RTSP 流，可用真实识别结果控制音乐、音量、灯光、电话和控制开关。
+- 手部骨架辅助层：MediaPipe 低频提取 10 个稀疏真实关键点，中间帧使用光流跟踪，Web 在原画面上用 Canvas 绘制轻量骨架；原 ONNX/OCSort 手势分类、名称和车辆业务执行逻辑保持不变。
 - 手势控制总开关：已完成。默认关闭，只有完成 `palm -> grabbing -> fist` 组合后才允许非电话类手势生效。
 - 电话例外：控制关闭时仍允许 `call` 接听和 `stop / stop_inverted` 挂断。
 - 业务层抑制：对点击、左右滑、音量反向、控制开关重复触发做冷却，减少一次动作被识别成多次反馈。
@@ -183,8 +184,8 @@ CTPGR_REFERENCE_DIR=               # CTPGR 模型参考库路径
 | RTSP 车牌识别 | `POST /api/plate/recognize-stream` | 对视频流采样识别 |
 | 启动手势流 | `POST /api/gesture/start` | 启动本机摄像头或 RTSP 手势识别 |
 | 停止手势流 | `POST /api/gesture/stop` | 停止手势识别 |
-| 手势消息 | `GET /api/gesture/messages` | 拉取帧消息与动作消息 |
-| 手势视频 | `GET /api/gesture/video-feed` | 查看带识别框和 HUD 的视频 |
+| 手势消息 | `GET /api/gesture/messages` | 拉取稀疏手部坐标、原手势分类与动作消息 |
+| 手势视频 | `GET /api/gesture/video-feed?raw=1` | 查看低延迟原画面；Web 根据手势消息叠加骨架和 HUD |
 | 模拟手势 | `POST /api/gesture/events` | 前端快捷按钮使用的模拟入口 |
 | 认证安全 | `GET /api/auth/security` | 查看登录与存储安全策略 |
 | 密码登录 | `POST /api/auth/login/password` | 演示账号或注册账号登录 |
@@ -315,7 +316,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/gesture/events `
 
 ## 注意事项
 
-- `vendor/web_gesture_backend/dgcore/models/*.onnx` 为手势识别模型文件，运行手势识别时必须保留。
+- `vendor/web_gesture_backend/dgcore/models/*.onnx` 和 `hand_landmarker.task` 为手势识别模型文件，运行手势识别时必须保留。
 - 摄像头占用、驱动权限或 RTSP 不可达会导致手势/视频流启动失败。
 - `onnxruntime-directml` 面向 Windows GPU 加速环境；如环境不支持，可根据本机情况替换为合适的 ONNX Runtime 包。
 - 本项目用于演示与教学场景，车控动作均为模拟状态，不直接连接真实车辆控制器。

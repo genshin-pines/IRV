@@ -7,6 +7,8 @@ import hmac
 import json
 import os
 import secrets
+import smtplib
+from email.message import EmailMessage
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -14,7 +16,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.config import AUTH_CODE_COOLDOWN_SEC, AUTH_CODE_TTL_SEC, AUTH_SECRET_KEY
+from backend.config import (
+    AUTH_CODE_COOLDOWN_SEC,
+    AUTH_CODE_TTL_SEC,
+    AUTH_SECRET_KEY,
+    EMAIL_FROM,
+    EMAIL_SMTP_HOST,
+    EMAIL_SMTP_PASSWORD,
+    EMAIL_SMTP_PORT,
+    EMAIL_SMTP_USER,
+)
 from backend.database import get_db
 from backend.models.auth_user import AuthCode, AuthUser
 from backend.services.log_service import write_log
@@ -101,10 +112,51 @@ def _ensure_code_cooldown(db: Session, target_hash: str) -> None:
         )
 
 
+def _email_ready() -> bool:
+    return all(
+        value.strip()
+        for value in (EMAIL_SMTP_HOST, EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD, EMAIL_FROM)
+    )
+
+
+def _send_email_code(email: str, code: str) -> None:
+    message = EmailMessage()
+    message["Subject"] = "IRV 登录验证码"
+    message["From"] = EMAIL_FROM
+    message["To"] = email
+    message.set_content(
+        f"您的 IRV 登录验证码是：{code}\n\n"
+        f"验证码 {AUTH_CODE_TTL_SEC // 60} 分钟内有效。若非本人操作，请忽略本邮件。"
+    )
+    try:
+        if EMAIL_SMTP_PORT == 465:
+            with smtplib.SMTP_SSL(EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, timeout=10) as smtp:
+                smtp.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, timeout=10) as smtp:
+                smtp.starttls()
+                smtp.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+                smtp.send_message(message)
+    except smtplib.SMTPException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"邮箱验证码发送失败: {exc}",
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"邮箱服务器连接失败: {exc}",
+        ) from exc
+
+
 def _find_or_create_contact_user(db: Session, contact: str, role: str) -> AuthUser:
     target_hash = _digest(_norm(contact))
     user = db.scalar(select(AuthUser).where(AuthUser.contact_hash == target_hash))
     if user:
+        requested_role = _role(role)
+        if user.role != requested_role:
+            user.role = requested_role
         return user
     user = AuthUser(
         username=f"user_{target_hash[:10]}",
@@ -161,6 +213,7 @@ def security_report():
             "browser_storage": "frontend session uses Web Crypto AES-GCM when available",
             "code_ttl_seconds": AUTH_CODE_TTL_SEC,
             "code_cooldown_seconds": AUTH_CODE_COOLDOWN_SEC,
+            "email_provider": "smtp" if _email_ready() else "development",
         }
     )
 
@@ -234,9 +287,42 @@ def sms_send(payload: CodeSendRequest, db: Session = Depends(get_db)):
 
 @router.post("/email/send")
 def email_send(payload: CodeSendRequest, db: Session = Depends(get_db)):
-    if not payload.email or "@" not in payload.email:
+    email = _norm(payload.email or "")
+    if not email or "@" not in email or email.startswith("@") or email.endswith("@"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱格式不正确")
-    return _ok(_send_code(payload.email, payload.role, db), "邮箱验证码已发送")
+    target_hash = _digest(email)
+    _ensure_code_cooldown(db, target_hash)
+    code = f"{secrets.randbelow(900000) + 100000}"
+    dev_mode = not _email_ready()
+
+    # Send first so a failed SMTP request does not create a cooldown record.
+    if not dev_mode:
+        _send_email_code(email, code)
+
+    db.add(
+        AuthCode(
+            target_hash=target_hash,
+            code_hash=_digest(f"{email}:{code}"),
+            role=_role(payload.role),
+            expires_at=datetime.utcnow() + timedelta(seconds=AUTH_CODE_TTL_SEC),
+        )
+    )
+    db.commit()
+    write_log(
+        "login",
+        "INFO",
+        f"email auth code issued target_hash={target_hash[:10]} provider={'development' if dev_mode else 'smtp'}",
+    )
+    return _ok(
+        {
+            "sent": True,
+            "dev_mode": dev_mode,
+            "provider": "development" if dev_mode else "smtp",
+            "dev_code": code if dev_mode else None,
+            "expires_in": AUTH_CODE_TTL_SEC,
+        },
+        "邮箱验证码已发送",
+    )
 
 
 def _login_code(target: str, code: str, role: str, db: Session) -> dict[str, Any]:
@@ -252,9 +338,14 @@ def _login_code(target: str, code: str, role: str, db: Session) -> dict[str, Any
         write_log("login", "WARNING", f"code login fail target_hash={target_hash[:10]}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="验证码无效或已过期")
     auth_code.used = True
-    user = _find_or_create_contact_user(db, normalized, auth_code.role or role)
+    requested_role = _role(role)
+    user = _find_or_create_contact_user(db, normalized, requested_role)
     db.commit()
-    write_log("login", "INFO", f"code login success user={user.username} role={user.role}")
+    write_log(
+        "login",
+        "INFO",
+        f"code login success user={user.username} role={user.role} issued_role={auth_code.role}",
+    )
     return _session(user)
 
 
