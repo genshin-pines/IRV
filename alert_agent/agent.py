@@ -97,6 +97,13 @@ class AlertAgent:
     # ── 核心逻辑 ──────────────────────────────────────
 
     async def trigger(self) -> list[dict]:
+        try:
+            return await self._do_trigger()
+        except Exception:
+            logger.exception("alert trigger failed")
+            return []
+
+    async def _do_trigger(self) -> list[dict]:
         new_logs = get_collector().get_new_logs()
         if not new_logs:
             return []
@@ -179,11 +186,18 @@ class AlertAgent:
                         len(alerts), [a["title"] for a in alerts])
         return alerts
 
+    # 自引用规则：这些规则与 LLM 本身相关，调用 LLM 分析无意义且会阻塞
+    _SKIP_LLM_RULES = frozenset({"llm_degradation"})
+
     def _to_create_payload(self, result: RuleResult) -> AlertCreate:
         raw_log = "\n".join(result.raw_logs[-20:])
         fallback = result.summary  # 规则模板已包含四段结构化文本
-        llm_summary = llm_service.summarize(result.raw_logs, fallback)
-        ai_generated = bool(llm_summary and llm_summary.strip() != fallback.strip())
+        if result.rule_id in self._SKIP_LLM_RULES:
+            llm_summary = ""
+            ai_generated = False
+        else:
+            llm_summary = llm_service.summarize(result.raw_logs, fallback)
+            ai_generated = bool(llm_summary and llm_summary.strip() != fallback.strip())
         return AlertCreate(
             level=result.level,
             title=result.title,

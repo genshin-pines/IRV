@@ -30,7 +30,13 @@ async def _loop(agent: AlertAgent) -> None:
 
 def _on_log_emitted() -> None:
     if _agent is not None and _event_loop is not None and _event_loop.is_running():
-        asyncio.run_coroutine_threadsafe(_agent.trigger(), _event_loop)
+        future = asyncio.run_coroutine_threadsafe(_agent.trigger(), _event_loop)
+        # 捕获异步异常，避免静默丢失
+        def _log_exc(fut):
+            exc = fut.exception()
+            if exc is not None:
+                logger.error("alert trigger coroutine failed: %s", exc)
+        future.add_done_callback(_log_exc)
 
 
 def start_scheduler(broadcast: Broadcast | None = None) -> None:
